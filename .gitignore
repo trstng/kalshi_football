@@ -1,5 +1,6 @@
 # Artifacts and outputs
 artifacts/
+!artifacts/*_enriched.csv
 *.csv
 *.parquet
 *.png
