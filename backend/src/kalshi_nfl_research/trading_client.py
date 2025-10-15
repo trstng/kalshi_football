@@ -6,7 +6,7 @@ import time
 from typing import Optional, Literal
 from dataclasses import dataclass
 
-import requests
+from kalshi_python import Configuration, KalshiClient as OfficialKalshiClient, PortfolioApi, CreateOrderRequest
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class Order:
 class KalshiTradingClient:
     """
     Client for Kalshi Trading API.
-    Handles authentication and order placement.
+    Handles authentication and order placement using the official kalshi-python library.
     """
 
     def __init__(
@@ -36,56 +36,41 @@ class KalshiTradingClient:
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
     ):
-        self.base_url = "https://api.elections.kalshi.com/trade-api/v2"
-        self.session = requests.Session()
-        self.token = None
+        # Convert literal \n in private key to actual newlines
+        if api_secret and '\\n' in api_secret:
+            api_secret = api_secret.replace('\\n', '\n')
 
-        # Authenticate
+        # Use official Kalshi client
         if api_key and api_secret:
-            self._login_with_api_key(api_key, api_secret)
+            config = Configuration(
+                host="https://api.elections.kalshi.com/trade-api/v2"
+            )
+            config.api_key_id = api_key
+            config.private_key_pem = api_secret
+            self.client = OfficialKalshiClient(config)
+            self.portfolio_api = PortfolioApi(self.client)
+            logger.info("Successfully authenticated with API key")
         elif email and password:
-            self._login_with_email(email, password)
+            # Official client doesn't support email/password, fall back to basic auth
+            raise NotImplementedError(
+                "Email/password authentication is deprecated. "
+                "Please use API key authentication instead."
+            )
         else:
-            raise ValueError("Must provide either (email, password) or (api_key, api_secret)")
-
-    def _login_with_email(self, email: str, password: str):
-        """Login using email and password."""
-        url = f"{self.base_url}/login"
-        response = self.session.post(url, json={"email": email, "password": password})
-        response.raise_for_status()
-
-        data = response.json()
-        self.token = data["token"]
-        self.session.headers.update({"Authorization": f"Bearer {self.token}"})
-
-        logger.info("Successfully authenticated with email")
-
-    def _login_with_api_key(self, api_key: str, api_secret: str):
-        """Login using API key and secret."""
-        # Kalshi API key authentication
-        # See: https://docs.kalshi.com/
-        self.session.headers.update({
-            "X-Api-Key": api_key,
-        })
-        logger.info("Successfully authenticated with API key")
+            raise ValueError("Must provide (api_key, api_secret)")
 
     def get_balance(self) -> int:
         """Get account balance in cents."""
-        url = f"{self.base_url}/portfolio/balance"
-        response = self.session.get(url)
-        response.raise_for_status()
-
-        data = response.json()
-        return data["balance"]
+        response = self.portfolio_api.get_balance()
+        return response.balance
 
     def get_positions(self) -> list[dict]:
         """Get all open positions."""
-        url = f"{self.base_url}/portfolio/positions"
-        response = self.session.get(url)
-        response.raise_for_status()
-
-        data = response.json()
-        return data.get("positions", [])
+        response = self.portfolio_api.get_positions()
+        # Convert response to list of dicts for compatibility
+        if hasattr(response, 'positions'):
+            return [pos.to_dict() if hasattr(pos, 'to_dict') else pos for pos in response.positions]
+        return []
 
     def place_order(
         self,
@@ -103,43 +88,42 @@ class KalshiTradingClient:
             market_ticker: Market ticker (e.g., "KXNFLGAME-25OCT13BUFATL")
             side: "yes" or "no"
             action: "buy" or "sell"
-            count: Number of contracts
+            count: int
             price: Price in cents (0-100)
             order_type: "limit" or "market"
 
         Returns:
             Order object with order details
         """
-        url = f"{self.base_url}/portfolio/orders"
-
-        payload = {
-            "ticker": market_ticker,
-            "side": side,
-            "action": action,
-            "count": count,
-            "type": order_type,
-        }
-
-        if order_type == "limit":
-            payload["yes_price"] = price if side == "yes" else None
-            payload["no_price"] = price if side == "no" else None
-
         logger.info(
             f"Placing order: {action} {count} {side} @ {price}¢ on {market_ticker}"
         )
 
-        response = self.session.post(url, json=payload)
-        response.raise_for_status()
+        # Create order request using official client
+        order_request = CreateOrderRequest(
+            ticker=market_ticker,
+            side=side,
+            action=action,
+            count=count,
+            type=order_type,
+            yes_price=price if side == "yes" else None,
+            no_price=price if side == "no" else None,
+        )
 
-        data = response.json()
+        # Place order through official API
+        response = self.portfolio_api.create_order(
+            create_order_request=order_request
+        )
+
+        # Convert response to our Order dataclass
         order = Order(
-            order_id=data["order_id"],
+            order_id=response.order.order_id,
             market_ticker=market_ticker,
             side=side,
             action=action,
             count=count,
             price=price,
-            status=data.get("status", "pending"),
+            status=response.order.status if hasattr(response.order, 'status') else "pending",
         )
 
         logger.info(f"Order placed successfully: {order.order_id}")
@@ -147,23 +131,27 @@ class KalshiTradingClient:
 
     def cancel_order(self, order_id: str) -> bool:
         """Cancel a pending order."""
-        url = f"{self.base_url}/portfolio/orders/{order_id}"
-
-        response = self.session.delete(url)
-        response.raise_for_status()
-
+        self.portfolio_api.cancel_order(order_id=order_id)
         logger.info(f"Order {order_id} cancelled")
         return True
 
     def get_order_status(self, order_id: str) -> dict:
         """Get status of an order."""
-        url = f"{self.base_url}/portfolio/orders/{order_id}"
-
-        response = self.session.get(url)
-        response.raise_for_status()
-
-        return response.json()
+        response = self.portfolio_api.get_order(order_id=order_id)
+        # Convert response to dict for compatibility
+        if hasattr(response, 'order'):
+            order = response.order
+            return {
+                "order_id": order.order_id if hasattr(order, 'order_id') else order_id,
+                "status": order.status if hasattr(order, 'status') else "unknown",
+                "ticker": order.ticker if hasattr(order, 'ticker') else None,
+                "side": order.side if hasattr(order, 'side') else None,
+                "action": order.action if hasattr(order, 'action') else None,
+                "count": order.count if hasattr(order, 'count') else None,
+            }
+        return {}
 
     def close(self):
-        """Close the session."""
-        self.session.close()
+        """Close the client."""
+        # Official client handles cleanup automatically
+        pass
