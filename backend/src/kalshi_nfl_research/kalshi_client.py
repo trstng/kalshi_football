@@ -254,16 +254,23 @@ class KalshiClient:
             yes_bids = orderbook.get("yes", [])
             yes_asks = orderbook.get("no", [])  # No side acts as yes asks
 
-            best_yes_bid = yes_bids[0] if yes_bids else {}
-            best_yes_ask = yes_asks[0] if yes_asks else {}
+            # Handle list format [price_cents, count]
+            best_yes_bid = yes_bids[0] if yes_bids else None
+            best_yes_ask = yes_asks[0] if yes_asks else None
+
+            # Extract price and count from list format
+            yes_bid_price = best_yes_bid[0] if best_yes_bid else None
+            yes_ask_price = best_yes_ask[0] if best_yes_ask else None
+            yes_bid_count = best_yes_bid[1] if best_yes_bid else None
+            yes_ask_count = best_yes_ask[1] if best_yes_ask else None
 
             return OrderbookSnapshot(
                 ticker=ticker,
                 ts=int(time.time()),
-                yes_bid=best_yes_bid.get("price"),
-                yes_ask=100 - best_yes_ask.get("price") if best_yes_ask.get("price") else None,
-                yes_bid_size=best_yes_bid.get("count"),
-                yes_ask_size=best_yes_ask.get("count"),
+                yes_bid=yes_bid_price,
+                yes_ask=100 - yes_ask_price if yes_ask_price else None,
+                yes_bid_size=yes_bid_count,
+                yes_ask_size=yes_ask_count,
             )
         except Exception as e:
             logger.warning(f"Failed to fetch orderbook for {ticker}: {e}")
