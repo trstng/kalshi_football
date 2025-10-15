@@ -79,6 +79,56 @@ class SupabaseLogger:
         except Exception as e:
             logger.error(f"Error updating game status: {e}")
 
+    def update_game_checkpoint(self, market_ticker: str, field_name: str, odds: float, timestamp: int):
+        """
+        Update checkpoint odds for a game.
+
+        Args:
+            market_ticker: Market ticker to identify the game
+            field_name: Name of the checkpoint field ('odds_6h', 'odds_3h', 'odds_30m')
+            odds: The odds value (0-1 probability)
+            timestamp: Unix timestamp when the checkpoint was captured
+        """
+        if not self.client:
+            return
+
+        try:
+            # Map field names to their timestamp fields
+            timestamp_field = field_name.replace('odds', 'checkpoint') + '_ts'
+
+            update_data = {
+                field_name: odds,
+                timestamp_field: timestamp,
+                'updated_at': 'now()'
+            }
+
+            self.client.table('games').update(update_data).eq('market_ticker', market_ticker).execute()
+            logger.debug(f"Updated {field_name}: {market_ticker} -> {odds:.0%}")
+        except Exception as e:
+            logger.error(f"Error updating checkpoint {field_name}: {e}")
+
+    def update_game_eligibility(self, market_ticker: str, is_eligible: bool):
+        """
+        Update the eligibility status for a game.
+
+        Args:
+            market_ticker: Market ticker to identify the game
+            is_eligible: Whether the game is eligible for trading based on checkpoint rules
+        """
+        if not self.client:
+            return
+
+        try:
+            update_data = {
+                'is_eligible': is_eligible,
+                'updated_at': 'now()'
+            }
+
+            self.client.table('games').update(update_data).eq('market_ticker', market_ticker).execute()
+            logger.debug(f"Updated eligibility: {market_ticker} -> {is_eligible}")
+        except Exception as e:
+            logger.error(f"Error updating eligibility: {e}")
+
     def log_position_entry(self, position_data: dict) -> Optional[str]:
         """
         Log a new position entry.

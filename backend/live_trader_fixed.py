@@ -47,7 +47,23 @@ class GameMonitor:
     yes_subtitle: str
     kickoff_ts: int
     halftime_ts: int
+
+    # Legacy field (kept for compatibility, will be set at 6h checkpoint)
     pregame_prob: Optional[float] = None
+
+    # Three checkpoint odds
+    odds_6h: Optional[float] = None
+    odds_3h: Optional[float] = None
+    odds_30m: Optional[float] = None
+
+    # Checkpoint timestamps (when we captured each)
+    checkpoint_6h_ts: Optional[int] = None
+    checkpoint_3h_ts: Optional[int] = None
+    checkpoint_30m_ts: Optional[int] = None
+
+    # Eligibility for trading
+    is_eligible: Optional[bool] = None  # None = not yet determined
+
     triggered: bool = False
     positions: list = field(default_factory=list)
 
@@ -199,15 +215,106 @@ class LiveTrader:
         return games
 
     def get_current_price(self, market_ticker: str) -> Optional[float]:
-        """Get current market price from orderbook."""
+        """Get current market price (favorite's probability)."""
         try:
-            orderbook = self.public_client.get_orderbook(market_ticker)
-            if not orderbook or not orderbook.yes_ask:
+            market = self.public_client.get_market(market_ticker)
+            if not market:
                 return None
-            return orderbook.yes_ask / 100.0
+
+            # Get best ask prices for both sides (price to BUY)
+            yes_ask = market.yes_ask if market.yes_ask is not None else 0
+            no_ask = market.no_ask if market.no_ask is not None else 0
+
+            # Return the higher of the two (the favorite's probability)
+            favorite_price = max(yes_ask, no_ask)
+            return favorite_price / 100.0 if favorite_price > 0 else None
         except Exception as e:
             logger.error(f"Error fetching price for {market_ticker}: {e}")
             return None
+
+    def check_and_capture_checkpoint(self, game: GameMonitor, now: int) -> bool:
+        """
+        Check if we need to capture a checkpoint and do so.
+
+        Returns True if a checkpoint was captured.
+        """
+        time_to_kickoff = game.kickoff_ts - now
+
+        # Define checkpoint windows (in seconds)
+        SIX_HOURS = 6 * 3600
+        THREE_HOURS = 3 * 3600
+        THIRTY_MIN = 30 * 60
+
+        # 6-hour checkpoint (within 6h-5.5h window)
+        if time_to_kickoff <= SIX_HOURS and game.odds_6h is None:
+            current_price = self.get_current_price(game.market_ticker)
+            if current_price:
+                game.odds_6h = current_price
+                game.checkpoint_6h_ts = now
+                game.pregame_prob = current_price  # Set legacy field
+                logger.info(f"  6h checkpoint: {current_price:.0%}")
+
+                # Update database
+                if self.supabase.client:
+                    self.supabase.update_game_checkpoint(game.market_ticker, 'odds_6h', current_price, now)
+                return True
+
+        # 3-hour checkpoint (within 3h-2.5h window)
+        elif time_to_kickoff <= THREE_HOURS and game.odds_3h is None:
+            current_price = self.get_current_price(game.market_ticker)
+            if current_price:
+                game.odds_3h = current_price
+                game.checkpoint_3h_ts = now
+                logger.info(f"  3h checkpoint: {current_price:.0%}")
+
+                # Update database
+                if self.supabase.client:
+                    self.supabase.update_game_checkpoint(game.market_ticker, 'odds_3h', current_price, now)
+                return True
+
+        # 30-min checkpoint (within 30min-25min window)
+        elif time_to_kickoff <= THIRTY_MIN and game.odds_30m is None:
+            current_price = self.get_current_price(game.market_ticker)
+            if current_price:
+                game.odds_30m = current_price
+                game.checkpoint_30m_ts = now
+                logger.info(f"  30m checkpoint: {current_price:.0%}")
+
+                # Determine final eligibility
+                self._determine_eligibility(game)
+
+                # Update database
+                if self.supabase.client:
+                    self.supabase.update_game_checkpoint(game.market_ticker, 'odds_30m', current_price, now)
+                    self.supabase.update_game_eligibility(game.market_ticker, game.is_eligible)
+                return True
+
+        return False
+
+    def _determine_eligibility(self, game: GameMonitor):
+        """
+        Determine if game is eligible for trading based on checkpoint rules.
+
+        Rules:
+        - If ANY checkpoint >= 57% → Eligible
+        - BUT if odds_30m < 57% → Override to NOT eligible (final veto)
+        """
+        threshold = 0.57
+
+        # Check if any checkpoint >= 57%
+        checkpoint_odds = [game.odds_6h, game.odds_3h, game.odds_30m]
+        has_high_checkpoint = any(odds and odds >= threshold for odds in checkpoint_odds if odds is not None)
+
+        # Final veto: if 30m checkpoint < 57%, not eligible
+        if game.odds_30m is not None and game.odds_30m < threshold:
+            game.is_eligible = False
+            logger.info(f"  → NOT ELIGIBLE (30m veto: {game.odds_30m:.0%} < 57%)")
+        elif has_high_checkpoint:
+            game.is_eligible = True
+            logger.info(f"  → ELIGIBLE (checkpoint(s) >= 57%)")
+        else:
+            game.is_eligible = False
+            logger.info(f"  → NOT ELIGIBLE (no checkpoint >= 57%)")
 
     def calculate_position_sizes(
         self,
@@ -254,15 +361,16 @@ class LiveTrader:
         if now >= game.kickoff_ts:
             return False
 
-        current_price = self.get_current_price(game.market_ticker)
-        if current_price is None:
+        # Must have completed 30m checkpoint to determine eligibility
+        if game.is_eligible is None:
+            return False  # Still waiting for checkpoints
+
+        # Must be eligible based on checkpoint rules
+        if not game.is_eligible:
             return False
 
-        if game.pregame_prob is None:
-            game.pregame_prob = current_price
-
-        favorite_threshold = self.config['trading']['pregame_favorite_threshold']
-        if game.pregame_prob < favorite_threshold:
+        current_price = self.get_current_price(game.market_ticker)
+        if current_price is None:
             return False
 
         trigger_threshold = self.config['trading']['trigger_threshold']
@@ -507,6 +615,9 @@ class LiveTrader:
                     if now > game.halftime_ts:
                         games_to_remove.append(market_ticker)
                         continue
+
+                    # Check and capture checkpoints (6h, 3h, 30m before kickoff)
+                    self.check_and_capture_checkpoint(game, now)
 
                     if not game.triggered and self.check_entry_signal(game):
                         active_positions = sum(1 for g in self.active_games.values() if g.positions)

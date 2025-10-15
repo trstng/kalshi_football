@@ -66,6 +66,13 @@ class MarketInfo(BaseModel):
     yes_sub_title: Optional[str] = None
     no_sub_title: Optional[str] = None
 
+    # Price data (in cents)
+    yes_bid: Optional[int] = None
+    yes_ask: Optional[int] = None
+    no_bid: Optional[int] = None
+    no_ask: Optional[int] = None
+    last_price: Optional[int] = None
+
     @field_validator("open_time", "close_time", "expiration_time", mode="before")
     @classmethod
     def convert_timestamp(cls, v: Any) -> Optional[int]:
