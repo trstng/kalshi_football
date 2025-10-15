@@ -3,6 +3,7 @@ Live Trading Bot - FIXED VERSION
 Uses external schedule CSVs since Kalshi doesn't provide strike_date for football games.
 """
 import logging
+import os
 import time
 import yaml
 import csv
@@ -79,13 +80,20 @@ class LiveTrader:
 
         if not self.config['risk']['dry_run']:
             creds = self.config['api_credentials']
+            # Read from environment variables first, fallback to config
+            email = os.getenv('KALSHI_EMAIL') or creds.get('email')
+            password = os.getenv('KALSHI_PASSWORD') or creds.get('password')
+            api_key = os.getenv('KALSHI_API_KEY') or creds.get('api_key')
+            api_secret = os.getenv('KALSHI_API_SECRET') or creds.get('api_secret')
+
             self.trading_client = KalshiTradingClient(
-                email=creds.get('email'),
-                password=creds.get('password'),
-                api_key=creds.get('api_key'),
-                api_secret=creds.get('api_secret'),
+                email=email,
+                password=password,
+                api_key=api_key,
+                api_secret=api_secret,
             )
             logger.info("✓ Trading client initialized (LIVE MODE)")
+            logger.info(f"  Using credentials from: {'environment variables' if os.getenv('KALSHI_API_KEY') else 'config file'}")
         else:
             self.trading_client = None
             logger.warning("⚠️  DRY RUN MODE - No real orders will be placed")
