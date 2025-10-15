@@ -22,6 +22,9 @@ from supabase_logger import SupabaseLogger
 # Load environment variables
 load_dotenv()
 
+# Create logs directory before logging config
+Path("logs").mkdir(exist_ok=True)
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -523,7 +526,6 @@ class LiveTrader:
 
 
 def main():
-    Path("logs").mkdir(exist_ok=True)
     trader = LiveTrader()
     trader.run()
 
