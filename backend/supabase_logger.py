@@ -244,3 +244,96 @@ class SupabaseLogger:
 
         except Exception as e:
             logger.error(f"Error logging price tick: {e}")
+
+    def log_order(self, market_ticker: str, order_id: str, price: int, size: int, side: str = 'buy') -> Optional[str]:
+        """
+        Log a new order placement.
+
+        Args:
+            market_ticker: Market ticker to identify the game
+            order_id: Kalshi order ID
+            price: Order price in cents
+            size: Number of contracts
+            side: 'buy' or 'sell'
+
+        Returns:
+            Order record ID if successful, None otherwise
+        """
+        if not self.client:
+            return None
+
+        try:
+            # Get game_id from market_ticker
+            game = self.client.table('games').select('id').eq('market_ticker', market_ticker).execute()
+
+            if not game.data:
+                logger.warning(f"Game not found for order: {market_ticker}")
+                return None
+
+            order_data = {
+                'game_id': game.data[0]['id'],
+                'market_ticker': market_ticker,
+                'order_id': order_id,
+                'price': price,
+                'size': size,
+                'filled_size': 0,
+                'status': 'pending',
+                'side': side
+            }
+
+            result = self.client.table('orders').insert(order_data).execute()
+
+            if result.data:
+                logger.debug(f"Logged order: {order_id} - {size} @ {price}¢ ({side})")
+                return result.data[0]['id']
+
+        except Exception as e:
+            logger.error(f"Error logging order: {e}")
+
+        return None
+
+    def update_order_status(self, order_id: str, status: str, filled_size: int = 0):
+        """
+        Update order status (e.g., when order fills or gets cancelled).
+
+        Args:
+            order_id: Kalshi order ID
+            status: 'pending', 'filled', 'partially_filled', 'cancelled'
+            filled_size: Number of contracts filled
+        """
+        if not self.client:
+            return
+
+        try:
+            update_data = {
+                'status': status,
+                'filled_size': filled_size,
+                'updated_at': 'now()'
+            }
+
+            self.client.table('orders').update(update_data).eq('order_id', order_id).execute()
+            logger.debug(f"Updated order {order_id}: {status} ({filled_size} filled)")
+
+        except Exception as e:
+            logger.error(f"Error updating order status: {e}")
+
+    def get_pending_orders(self, market_ticker: str) -> list:
+        """
+        Get all pending orders for a market.
+
+        Args:
+            market_ticker: Market ticker to identify the game
+
+        Returns:
+            List of pending order records
+        """
+        if not self.client:
+            return []
+
+        try:
+            result = self.client.table('orders').select('*').eq('market_ticker', market_ticker).eq('status', 'pending').execute()
+            return result.data if result.data else []
+
+        except Exception as e:
+            logger.error(f"Error getting pending orders: {e}")
+            return []

@@ -27,10 +27,20 @@ Adds the three-checkpoint trading system:
 
 ### 002_add_market_ticks_table.sql
 **Date**: 2025-10-15
-**Status**: Pending
+**Status**: Applied
 
 Adds tick data collection for backtesting:
 - `market_ticks` table - Stores price snapshots captured every 10 seconds
 - Captures: timestamp, favorite_price, yes_ask, no_ask
 - Linked to games table via game_id foreign key
 - Automatically populated by live trader during monitoring
+
+### 003_add_orders_table.sql
+**Date**: 2025-10-15
+**Status**: Pending
+
+Adds order tracking for limit order ladder strategy:
+- `orders` table - Stores all placed orders with fill status
+- Tracks: order_id, price, size, filled_size, status (pending/filled/cancelled)
+- Separates order placement from position fills
+- Enables "Open Orders" dashboard view separate from "Filled Positions"

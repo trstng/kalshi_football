@@ -64,8 +64,10 @@ class GameMonitor:
     # Eligibility for trading
     is_eligible: Optional[bool] = None  # None = not yet determined
 
-    triggered: bool = False
-    positions: list = field(default_factory=list)
+    # Order tracking
+    triggered: bool = False  # Have we placed orders yet?
+    order_ids: list = field(default_factory=list)  # Pending order IDs
+    positions: list = field(default_factory=list)  # Filled positions only
 
 
 @dataclass
@@ -414,14 +416,8 @@ class LiveTrader:
 
             if self.config['risk']['dry_run']:
                 logger.info("  [DRY RUN] Would place order here")
-                position = Position(
-                    market_ticker=game.market_ticker,
-                    entry_price=price_cents,
-                    size=size,
-                    entry_time=int(time.time()),
-                    order_id=f"dry_run_{len(game.positions)}"
-                )
-                game.positions.append(position)
+                order_id = f"dry_run_{len(game.order_ids)}"
+                game.order_ids.append(order_id)
             else:
                 try:
                     order = self.trading_client.place_order(
@@ -432,27 +428,21 @@ class LiveTrader:
                         price=price_cents,
                         order_type="limit"
                     )
-                    position = Position(
-                        market_ticker=game.market_ticker,
-                        entry_price=price_cents,
-                        size=size,
-                        entry_time=int(time.time()),
-                        order_id=order.order_id
-                    )
-                    game.positions.append(position)
+                    game.order_ids.append(order.order_id)
                     logger.info(f"  ✓ Order placed: {order.order_id}")
+
+                    # Log order to dashboard (NOT position - that happens when order fills)
+                    if self.supabase.client:
+                        self.supabase.log_order(
+                            market_ticker=game.market_ticker,
+                            order_id=order.order_id,
+                            price=price_cents,
+                            size=size,
+                            side='buy'
+                        )
+
                 except Exception as e:
                     logger.error(f"  ✗ Error placing order: {e}")
-
-            # Log position to dashboard
-            if self.supabase.client:
-                self.supabase.log_position_entry({
-                    'market_ticker': game.market_ticker,
-                    'entry_price': price_cents,
-                    'size': size,
-                    'entry_time': int(time.time()),
-                    'order_id': position.order_id
-                })
 
         game.triggered = True
         game.highest_entry = max(p[0] for p in positions)
@@ -462,8 +452,76 @@ class LiveTrader:
         if self.supabase.client:
             self.supabase.update_game_status(game.market_ticker, 'triggered', game.pregame_prob)
 
-        logger.info(f"Position entered. Total exposure: ${self.total_exposure:,.2f}")
+        logger.info(f"Orders placed. Total potential exposure: ${self.total_exposure:,.2f}")
         logger.info("")
+
+    def check_order_fills(self, game: GameMonitor):
+        """Check if any pending orders have filled and convert them to positions."""
+        if not game.order_ids or self.config['risk']['dry_run']:
+            return
+
+        if not self.trading_client:
+            return
+
+        filled_orders = []
+
+        for order_id in game.order_ids:
+            try:
+                status_response = self.trading_client.get_order_status(order_id)
+                order_status = status_response.get('order', {})
+
+                status = order_status.get('status', 'pending')
+                filled_count = order_status.get('filled_count', 0)
+                total_count = order_status.get('count', 0)
+                price = order_status.get('yes_price') or order_status.get('no_price', 0)
+
+                # Update order status in database
+                if self.supabase.client:
+                    if status == 'filled':
+                        self.supabase.update_order_status(order_id, 'filled', filled_count)
+                    elif filled_count > 0 and filled_count < total_count:
+                        self.supabase.update_order_status(order_id, 'partially_filled', filled_count)
+
+                # Create position for filled orders
+                if filled_count > 0:
+                    # Check if we already created a position for this order
+                    existing_position = next(
+                        (p for p in game.positions if p.order_id == order_id),
+                        None
+                    )
+
+                    if not existing_position:
+                        position = Position(
+                            market_ticker=game.market_ticker,
+                            entry_price=price,
+                            size=filled_count,
+                            entry_time=int(time.time()),
+                            order_id=order_id
+                        )
+                        game.positions.append(position)
+                        logger.info(f"  ✓ Order filled: {order_id} - {filled_count} @ {price}¢")
+
+                        # Log position to dashboard
+                        if self.supabase.client:
+                            self.supabase.log_position_entry({
+                                'market_ticker': game.market_ticker,
+                                'entry_price': price,
+                                'size': filled_count,
+                                'entry_time': int(time.time()),
+                                'order_id': order_id
+                            })
+
+                # Track fully filled orders to remove from pending list
+                if status == 'filled':
+                    filled_orders.append(order_id)
+
+            except Exception as e:
+                logger.debug(f"Error checking order status {order_id}: {e}")
+
+        # Remove fully filled orders from pending list
+        for order_id in filled_orders:
+            if order_id in game.order_ids:
+                game.order_ids.remove(order_id)
 
     def check_exit_signal(self, game: GameMonitor) -> bool:
         """Check if we should exit position."""
@@ -626,6 +684,10 @@ class LiveTrader:
                                     )
                         except Exception as e:
                             logger.debug(f"Error logging tick for {game.market_ticker}: {e}")
+
+                    # Check if any pending orders have filled
+                    if game.triggered and game.order_ids:
+                        self.check_order_fills(game)
 
                     if not game.triggered and self.check_entry_signal(game):
                         active_positions = sum(1 for g in self.active_games.values() if g.positions)
