@@ -36,7 +36,7 @@ class KalshiTradingClient:
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
     ):
-        self.base_url = "https://trading-api.kalshi.com/trade-api/v2"
+        self.base_url = "https://api.elections.kalshi.com/trade-api/v2"
         self.session = requests.Session()
         self.token = None
 
