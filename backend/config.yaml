@@ -1,0 +1,28 @@
+# Kalshi NFL Research Configuration
+# All parameters can be overridden via CLI flags
+
+# API Configuration
+kalshi_base: "https://api.elections.kalshi.com/trade-api/v2"
+rate_limit_sleep_ms: 200
+
+# Data Collection
+candle_interval: "1m"
+pregame_window_sec: 900  # 15 minutes before kickoff
+first_half_sec: 1800     # 30 minutes (half duration)
+grace_sec_for_fill: 15   # Window to find fillable trade after trigger
+
+# Strategy Parameters
+pregame_favorite_threshold: 0.60  # Require > 60% implied probability pregame
+trigger_threshold: 0.50           # Enter when price drops below 50%
+revert_bands: [0.55, 0.60, 0.65, 0.70]  # Exit targets (implied probability)
+
+# Costs & Risk
+per_contract_fee: 0.01       # Dollars per contract
+extra_slippage: 0.005        # 0.5 cents as dollars (applied to entry/exit)
+mae_stop_prob: null          # Max adverse excursion stop (e.g., 0.12 for -12%)
+
+# Execution
+timeout: "halftime"          # "halftime" or "full" (full game timeout)
+
+# Logging
+log_level: "INFO"            # DEBUG, INFO, WARNING, ERROR

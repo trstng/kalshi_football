@@ -1,0 +1,117 @@
+# Live Trading Configuration
+
+# Kalshi API Credentials (REQUIRED)
+# Get these from: https://kalshi.com/settings/api
+api_credentials:
+  email: "tgonz.98@gmail.com"  # Your Kalshi email
+  password: "Necart2029!"  # Your Kalshi password
+  # OR use API key (more secure)
+  api_key: "c71e729d-f501-45a8-a551-c7b7554d2541"  # Your API key
+  api_secret: "MIIEpgIBAAKCAQEA7sYZYJb4kQAxUTrOmo5nUqhsr58BL7iqzbXE7upckckGyGTd
+Xji57Jl43AqEejFmurwaFBf1d3zuzN2dP1nIlkqEVDC7B81BGHUt2oZUgfkwXKT1
+s8fI5maBrwnBP3IB5t/GqeVmkkp/kUdiVvSxtwf1LYsNTwvrresi/zB6/9mPX1hs
+9NDav459S4kb05JJ3dZj5NcCoWb+3cYcXUcq8M4wH1HlpwFmCUmvmVurtG1rIWCi
+Q2n/KbtEm8vP/H7A1oPtoWGdaTm94zWnM9JBGPOdMzKolBS/SivGkklipQ9noN63
+FkmjEl38cPH4haXZboy/TgQqBtW3WAeDnaufNQIDAQABAoIBAQCypdES7aHoi2Za
+yk8OYIF53L4E4Ei49cgFxXwk7YB5KxlCEgV2m6awGVvN9qiL7C5ahKZWZl6oGfdp
+nF4sqfZkTDiZ7SPigHW14OZ/24WbAWBn0Jxs+IudpxBccEYAPEKkBMXVE+gciFTN
+08UGHmpg8TlF7AX3IIojRAyZNiKxDRo0ci9Un0x0m02tYUmCo6xQ8K7poi9/RuBO
+HWpXgO2QLIOx78DUOjiqsssWirE2c0tUKV/9X5TPPxINnd8K/4NAkigXxH9gr4Pb
+PHw1xkmUFlkvOjkTnXy4D+OjMqlNigNLWzqDHbuJQuL+e+De6Zyb2bLTvqF2tFd7
+ajLVDO15AoGBAPRJ4PyW1BjfbTaO/VHszNpnpDFyyYfNCrCyv3D8c0oaLRjlYCpq
+303L1/pNhU7WcD4AYG9aP66CCrhSooQVE3tQeYyJOeyBNXM6RY6jC38hOYHcSXUn
+HNQ3kKyCNCHiUQ2VeZwa8kd8a9ZDSWdxl33qpCe2FpRTW+CCmkXOyd7TAoGBAPo4
+ic6e1nDj0TJ52YMmDWps8y6UlpLpNfR9QZROwb7wU3JZWG6qbyZnlv8qH0Sq7R44
+kGir3+Kq/WcevKhBr1cGBHyWfIuHd8OSPwcluaLEDRyoSVYafyW8mBidvpV+jVrS
+C9RKGhpnOjTKJOkGYqVJ9z0GV3/ZmYdk7dyGwxTXAoGBAKIBFKmuRP4xvbW+4hQg
+nEIDFYqNe0UKH5rLD9aYNMTh0yJ9i2bV9T0cgCDIpC2CXHFhwpJWIYFTUFSoyIob
+iA3xcopWvwkvLwk5jcNoMUmf+Qk706NTyvSZ3OHqfzQxaFs/06RI4n+x7bnsaZOm
+azbgEvka8qJvHbEoK7M7zfhtAoGBAIdh/dXohPgRm0enO/PEq++QQUdLp+iW+9Vr
+zAa1UgjAOTYed0VxO7BYzg8DOGXL4X2/dwrbK8iVYYPg0oxq9batD9JlDb/krP0I
+7McuNzGEx99ggkVvEqpVTynKd6qlDVA9Y58Z9OOiRJD5al0WUltCGN5QxxjqoDHs
+fvIZjAWDAoGBALdqtQvMFepBLGGjP47/ikcswNebGl3rn+eYfB9wo14NJ9ikajIX
+ypJgCUA7a3m7f607usibUCZvQaOoswJAzUaenYehimtS5dPvvLcg5FwKg3v6nfts
+UVak0FACx7NtiT2H13IBAaHz5LwgI+tRn4YIcvTnt1jFKY/gnpf4i0Qm"  # Your API secret
+
+# Trading Parameters
+trading:
+  # Starting bankroll (in dollars)
+  bankroll: 500
+
+  # Maximum exposure per game (50% = half your bankroll)
+  max_exposure_pct: 0.50
+
+  # Kelly fraction (0.15 = 1/4 Kelly, conservative)
+  kelly_fraction: 0.15
+
+  # Strategy parameters
+  pregame_favorite_threshold: 0.60  # Only trade games with >60% pregame favorite
+  trigger_threshold: 0.50  # Enter when price drops below 50%
+
+  # Revert bands (exit targets)
+  revert_bands: [0.55, 0.60, 0.65, 0.70]
+
+  # Scaling levels (price in cents, Kelly multiplier)
+  scaling_levels:
+    - trigger: 49
+      kelly_mult: 1.0
+    - trigger: 45
+      kelly_mult: 1.5
+    - trigger: 41
+      kelly_mult: 2.0
+    - trigger: 37
+      kelly_mult: 2.5
+    - trigger: 33
+      kelly_mult: 3.0
+
+# Sports to trade
+markets:
+  nfl:
+    enabled: true
+    series_ticker: "KXNFLGAME"
+
+  cfb:
+    enabled: true  # Set to false if you only want NFL
+    series_ticker: "KXNCAAFGAME"
+
+# Risk Management
+risk:
+  # Maximum number of simultaneous games
+  max_concurrent_games: 5
+
+  # Maximum loss per game (in dollars)
+  max_loss_per_game: 500
+
+  # Stop trading if bankroll drops below this amount
+  min_bankroll: 50
+
+  # Enable dry run mode (paper trading, no real orders)
+  dry_run: true  # CHANGE TO false FOR REAL TRADING
+
+# Monitoring
+monitoring:
+  # How often to check prices (in seconds)
+  poll_interval: 10
+
+  # How far ahead to look for games (in hours)
+  lookahead_hours: 6
+
+  # Log file path
+  log_file: "logs/live_trading.log"
+
+  # Enable Telegram/Discord alerts (optional)
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+
+# Safety Checks
+safety:
+  # Require manual confirmation before placing orders
+  require_confirmation: true
+
+  # Maximum order size (number of contracts)
+  max_contracts_per_order: 100
+
+  # Maximum total capital at risk across all games
+  max_total_exposure: 500

@@ -1,0 +1,163 @@
+KALSHI NFL RESEARCH TOOLCHAIN - PROJECT SUMMARY
+================================================
+
+OVERVIEW
+--------
+This is a production-ready Python research toolchain for backtesting an in-game NFL reversion
+strategy on Kalshi sports markets. The strategy identifies pregame favorites (>60% implied)
+that drop below 50% during the first half, buys the dip, and exits on reversion or timeout.
+
+STRATEGY INTUITION
+------------------
+Strong pregame favorites often face adverse in-game events (turnovers, injuries, early scores
+by underdogs) that cause temporary price dislocations. This strategy aims to capture mean
+reversion when the market overreacts to short-term negative information.
+
+The hypothesis is that:
+1. Pregame favorites with >60% implied win probability have fundamental advantages (team
+   quality, home field, matchup edge).
+2. A drop below 50% during the first half often represents an overreaction to variance
+   (a single drive or turnover) rather than a true probability shift.
+3. By entering conservatively (at ask + slippage) and exiting on partial reversion (55-70%),
+   we can capture a repeatable edge with favorable risk/reward.
+
+IMPLEMENTATION HIGHLIGHTS
+--------------------------
+- **Robust API Client**: Handles pagination, rate limiting, and multiple endpoints (series,
+  events, markets, trades, candles, orderbook).
+- **Strong Typing**: Pydantic models ensure data integrity and clear contracts.
+- **Conservative Fills**: Entry at ask, exit at bid, with explicit slippage modeling to
+  avoid overestimating profitability.
+- **Comprehensive Testing**: Unit tests cover pagination, trigger detection, fill logic,
+  time windows, and cost calculations.
+- **Rich Outputs**: CSV, Parquet, markdown reports, and matplotlib visualizations (equity
+  curves, P&L distributions, game timelines, MAE/MFE scatter).
+- **Configurable**: All parameters (thresholds, bands, fees, slippage, timeouts) can be
+  adjusted via config.yaml or CLI flags.
+
+KEY FEATURES
+------------
+✓ Three CLI commands: discover-nfl, pull-game, backtest
+✓ Automatic NFL series and WIN market discovery
+✓ Event-scoped candlestick and trade data fetching
+✓ Trigger detection with first-half time window enforcement
+✓ Multi-band exit strategy (55%, 60%, 65%, 70%)
+✓ Per-band performance metrics (hit rate, avg P&L, Sharpe, EV/trade)
+✓ MAE/MFE calculation for risk analysis
+✓ Timeout exits (halftime or full game)
+✓ Optional MAE stop-loss
+✓ Full reproducibility (command line + config snapshot in summary.md)
+
+BACKTEST RESULTS INTERPRETATION
+--------------------------------
+When you run a backtest, pay attention to:
+
+1. **Number of Qualified Events**: If this is much lower than analyzed events, consider
+   lowering the pregame threshold or checking data quality.
+
+2. **Number of Triggered Trades**: If many qualified games don't trigger, the market may
+   be efficient (no dips <50% for strong favorites). This is actually a positive signal—
+   it means the strategy is selective.
+
+3. **Overall Win Rate**: Above 55% is promising for a mean-reversion strategy. However,
+   win rate alone doesn't tell the full story—check EV per trade.
+
+4. **EV Per Trade by Band**: Higher bands (65%, 70%) typically have lower hit rates but
+   higher payoffs. Look for bands with positive EV and acceptable Sharpe ratios.
+
+5. **MAE/MFE Analysis**: If MAE (max adverse excursion) is consistently large, consider
+   adding a stop-loss. If MFE (max favorable excursion) >> exit bands, you may be
+   exiting too early.
+
+6. **Hold Time**: Shorter hold times (5-15 min) suggest fast reversions (good). Long hold
+   times (>25 min) may indicate waiting for timeout exits (less ideal).
+
+WHAT TO TEST NEXT
+------------------
+If the initial backtest shows promise:
+
+1. **Sensitivity Analysis**: Sweep over pregame thresholds (55-70%) and entry thresholds
+   (45-55%) to find optimal parameters.
+
+2. **Kelly Sizing**: Use EV and variance estimates from band_metrics.csv to compute Kelly
+   fractions for optimal position sizing.
+
+3. **Stop-Loss Optimization**: Test MAE stops at -8¢, -10¢, -12¢ to see if cutting losses
+   improves Sharpe ratio.
+
+4. **Full-Game Exits**: Compare halftime vs full-game timeout to see if holding longer
+   captures more reversions.
+
+5. **Orderbook Depth**: Incorporate bid/ask spreads and size constraints to model slippage
+   more realistically.
+
+6. **Live Execution Simulation**: Run the strategy in "paper trading" mode during live
+   games to validate fill assumptions.
+
+7. **Alternative Markets**: Test on other sports (NBA, MLB) or on different market types
+   (spreads, totals).
+
+CAVEATS & KNOWN LIMITATIONS
+----------------------------
+- **Survivorship Bias**: Only includes games with complete market data. Games with technical
+  issues or delisted markets are excluded.
+- **Slippage Model**: Fixed slippage (0.5¢) may underestimate real costs in thin markets
+  or during high volatility.
+- **No Position Sizing**: All trades are simulated as 1 contract. Real implementation would
+  require Kelly or risk-adjusted sizing.
+- **No Adverse Selection**: The model assumes fills are always available at the quoted
+  prices. In reality, you may get filled more often on losing trades (adverse selection).
+- **Data Latency**: Backtest uses historical data with perfect timestamps. Live execution
+  will face latency and may miss triggers.
+- **Market Impact**: Assumes zero market impact (small position size). Larger trades would
+  move the market.
+
+ACCEPTANCE CRITERIA MET
+------------------------
+✓ Discovers NFL events and detects WIN market tickers
+✓ Produces valid trades.csv with entry/exit timestamps, prices, P&L
+✓ Generates band_metrics.csv with N, hit_rate, avg_pnl, median_pnl, stdev, win_pct, EV
+✓ Renders plots without errors (equity curve, distribution, sample games, MAE/MFE)
+✓ Unit tests pass: pytest exits 0
+✓ README shows install + example commands
+
+EDGE ASSESSMENT
+----------------
+NOTE: This is a TEMPLATE summary. To assess whether the edge is real, you must:
+
+1. Run the backtest on historical NFL data (e.g., 2024 season)
+2. Analyze the results in band_metrics.csv and summary.md
+3. Check if any bands show positive EV with acceptable Sharpe ratios
+4. Validate that the strategy is not overfitted to a small sample
+
+EXAMPLE HYPOTHETICAL RESULTS (FOR ILLUSTRATION ONLY):
+- Events Analyzed: 156 (full 2024 NFL season)
+- Events Qualified: 89 (57% had pregame favorite >60%)
+- Trades Triggered: 34 (38% of qualified games had a dip <50%)
+- Trades Filled: 34 (100% fillable within grace window)
+- Overall Win Rate: 61.8%
+- Total P&L (Net): $12.45 per contract
+- Best Band: 0.60 (hit rate 29%, EV/trade $0.62, Sharpe 0.50)
+
+INTERPRETATION: If these were real results, a ~62% win rate with $0.62 EV/trade on the 0.60
+band would be promising but requires further validation:
+- Is the sample size large enough? (34 trades is borderline)
+- Is the edge stable across seasons?
+- Does it persist in live execution with real slippage and latency?
+
+NEXT ACTIONS
+------------
+1. Install dependencies and run a full backtest on 2024 NFL data
+2. Review band_metrics.csv to identify the most profitable exit strategy
+3. Analyze MAE/MFE scatter to assess risk and adjust stops
+4. Run sensitivity sweeps to avoid parameter overfitting
+5. If edge looks robust, proceed to paper trading with live data
+
+CONCLUSION
+----------
+This toolchain provides a complete, reproducible framework for testing the mean-reversion
+hypothesis on Kalshi NFL markets. It is designed for quantitative researchers who value
+code quality, reproducibility, and rigorous testing. Use the backtest results to inform
+further research, not as a guarantee of future performance.
+
+Good luck with your research!

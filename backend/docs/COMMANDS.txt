@@ -1,0 +1,84 @@
+LIVE TRADING BOT - QUICK REFERENCE
+====================================
+
+START BOT (Dry Run - Safe Mode)
+--------------------------------
+python3 live_trader_fixed.py
+
+
+START BOT (Live Trading - Real Money)
+--------------------------------------
+1. Edit live_trading_config.yaml:
+   change: dry_run: false
+
+2. Run:
+   python3 live_trader_fixed.py
+
+
+TEST SETUP
+----------
+python3 test_setup.py
+
+
+VIEW LOGS (Real-time)
+---------------------
+tail -f logs/live_trading.log
+
+
+STOP BOT
+--------
+Press Ctrl+C
+
+
+CHECK UPCOMING GAMES
+--------------------
+python3 -c "
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd() / 'src'))
+from kalshi_nfl_research.kalshi_client import KalshiClient
+client = KalshiClient()
+nfl = client.get_events(series_ticker='KXNFLGAME')
+cfb = client.get_events(series_ticker='KXNCAAFGAME')
+print(f'NFL: {len(nfl)} games')
+print(f'CFB: {len(cfb)} games')
+"
+
+
+FILES
+-----
+Configuration:    live_trading_config.yaml
+Main Bot:         live_trader.py
+Setup Test:       test_setup.py
+Logs:             logs/live_trading.log
+
+Documentation:
+  - LIVE_TRADING_SETUP.md (complete guide)
+  - QUICKSTART.md (quick start)
+  - LIVE_TRADING_SUMMARY.txt (this setup)
+
+
+YOUR SETTINGS
+-------------
+Bankroll:         $500
+Max Exposure:     $250 per game (50%)
+Dry Run:          ENABLED (safe)
+Kelly Fraction:   15% (1/4 Kelly)
+Max Games:        5 concurrent
+
+
+STRATEGY
+--------
+Entry:  Pregame favorite >60% drops below 50%
+Scale:  49¢, 45¢, 41¢, 37¢, 33¢
+Exit:   Revert to 55%, 60%, 65%, 70% OR halftime
+
+
+SAFETY
+------
+✓ Dry run mode enabled
+✓ Position limits set
+✓ Risk management active
+✓ All trades logged
+
+⚠️ START WITH DRY RUN MODE!
