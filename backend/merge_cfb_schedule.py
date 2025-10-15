@@ -117,24 +117,71 @@ def main():
         unmatched_markets = []
 
         for event, market in games_with_markets:
-            # Try to extract team names from event ticker or market title
-            # CFB tickers are probably similar: KXNCAAFGAME-25AUG28USFBSU or similar
+            # Parse title: "Team A at Team B Winner?"
+            match = re.match(r'^(.+?)\s+at\s+(.+?)\s+Winner\?$', market.title, re.IGNORECASE)
 
-            # For now, save as unmatched - we'll need to analyze ticker format
-            unmatched_markets.append((event, market, "Ticker format unknown"))
+            if not match:
+                unmatched_markets.append((event, market, f"Could not parse title: {market.title}"))
+                continue
+
+            away_raw = match.group(1).strip()
+            home_raw = match.group(2).strip()
+
+            # Normalize names
+            away = normalize_cfb_team(away_raw)
+            home = normalize_cfb_team(home_raw)
+
+            # Try to match with schedule
+            key = f"{away}@{home}"
+            if key in schedule_games:
+                game_info = schedule_games[key]
+                matched_markets.append({
+                    'event_ticker': event.event_ticker,
+                    'market_ticker': market.ticker,
+                    'market_title': market.title,
+                    'yes_subtitle': market.yes_sub_title,
+                    'series_ticker': event.series_ticker,
+                    'away_team': game_info['away'],
+                    'home_team': game_info['home'],
+                    'kickoff_ts': game_info['kickoff_ts'],
+                })
+            else:
+                unmatched_markets.append((event, market, f"No schedule match for {away} @ {home}"))
 
         print(f"Matched: {len(matched_markets)} markets")
         print(f"Unmatched: {len(unmatched_markets)} markets")
         print()
 
-        # Show sample of unmatched to understand format
+        # Save enriched data
+        output_path = 'artifacts/cfb_markets_2025_enriched.csv'
+        with open(output_path, 'w', newline='') as f:
+            fieldnames = [
+                'event_ticker', 'market_ticker', 'market_title', 'yes_subtitle',
+                'series_ticker', 'away_team', 'home_team', 'kickoff_ts'
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(matched_markets)
+
+        print(f"✓ Saved {len(matched_markets)} enriched markets to: {output_path}")
+        print()
+
+        # Show samples
+        if matched_markets:
+            print("Sample matched markets:")
+            for i, m in enumerate(matched_markets[:5], 1):
+                kickoff_dt = datetime.fromtimestamp(m['kickoff_ts']).strftime('%Y-%m-%d %H:%M UTC')
+                print(f"{i}. {m['away_team']} @ {m['home_team']}")
+                print(f"   {m['market_ticker']} ({m['yes_subtitle']})")
+                print(f"   Kickoff: {kickoff_dt}")
+                print()
+
+        # Show sample unmatched to understand format
         if unmatched_markets:
-            print("Sample unmatched markets (need to understand ticker format):")
+            print("Sample unmatched markets:")
             for i, (event, market, reason) in enumerate(unmatched_markets[:10], 1):
-                print(f"{i}. {event.event_ticker}")
-                print(f"   Market: {market.ticker}")
-                print(f"   Title: {market.title}")
-                print(f"   Yes: {market.yes_sub_title}")
+                print(f"{i}. {market.title}")
+                print(f"   Reason: {reason}")
                 print()
 
     except Exception as e:
