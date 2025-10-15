@@ -482,6 +482,12 @@ class LiveTrader:
                             kickoff_dt = datetime.fromtimestamp(game.kickoff_ts)
                             logger.info(f"Monitoring: {game.market_title} @ {kickoff_dt.strftime('%Y-%m-%d %H:%M UTC')}")
 
+                            # Fetch current odds for dashboard
+                            current_price = self.get_current_price(game.market_ticker)
+                            if current_price:
+                                game.pregame_prob = current_price
+                                logger.info(f"  Current odds: {current_price:.0%}")
+
                             # Log game to dashboard
                             if self.supabase.client:
                                 self.supabase.log_game({
