@@ -155,7 +155,10 @@ export default function Dashboard() {
                       Kickoff
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
-                      Pregame Prob
+                      Checkpoint Odds
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
+                      Eligibility
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
                       Status
@@ -165,7 +168,7 @@ export default function Dashboard() {
                 <tbody>
                   {activeGames.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="px-6 py-12 text-center">
+                      <td colSpan={5} className="px-6 py-12 text-center">
                         <div className="flex flex-col items-center gap-3">
                           <svg className="w-16 h-16 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -186,13 +189,73 @@ export default function Dashboard() {
                           {format(new Date(game.kickoff_ts * 1000), 'MMM d, h:mm a')}
                         </td>
                         <td className="px-6 py-4">
-                          {game.pregame_prob ? (
-                            <div className="inline-flex items-center gap-2 bg-slate-700/50 px-3 py-1 rounded-full">
-                              <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
-                              <span className="text-white font-bold">{(game.pregame_prob * 100).toFixed(0)}%</span>
+                          <div className="flex flex-col gap-1.5">
+                            {/* 6h checkpoint */}
+                            <div className="flex items-center gap-2">
+                              <span className="text-gray-500 text-xs font-semibold w-8">6h:</span>
+                              {game.odds_6h ? (
+                                <div className="inline-flex items-center gap-2 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/30">
+                                  <div className="w-1.5 h-1.5 bg-blue-400 rounded-full"></div>
+                                  <span className="text-blue-300 font-bold text-sm">{(game.odds_6h * 100).toFixed(0)}%</span>
+                                  {game.checkpoint_6h_ts && (
+                                    <span className="text-gray-500 text-xs">
+                                      {format(new Date(game.checkpoint_6h_ts * 1000), 'h:mm a')}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-gray-600 text-xs">Pending</span>
+                              )}
                             </div>
+                            {/* 3h checkpoint */}
+                            <div className="flex items-center gap-2">
+                              <span className="text-gray-500 text-xs font-semibold w-8">3h:</span>
+                              {game.odds_3h ? (
+                                <div className="inline-flex items-center gap-2 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/30">
+                                  <div className="w-1.5 h-1.5 bg-purple-400 rounded-full"></div>
+                                  <span className="text-purple-300 font-bold text-sm">{(game.odds_3h * 100).toFixed(0)}%</span>
+                                  {game.checkpoint_3h_ts && (
+                                    <span className="text-gray-500 text-xs">
+                                      {format(new Date(game.checkpoint_3h_ts * 1000), 'h:mm a')}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-gray-600 text-xs">Pending</span>
+                              )}
+                            </div>
+                            {/* 30m checkpoint */}
+                            <div className="flex items-center gap-2">
+                              <span className="text-gray-500 text-xs font-semibold w-8">30m:</span>
+                              {game.odds_30m ? (
+                                <div className="inline-flex items-center gap-2 bg-green-500/10 px-2 py-0.5 rounded border border-green-500/30">
+                                  <div className="w-1.5 h-1.5 bg-green-400 rounded-full"></div>
+                                  <span className="text-green-300 font-bold text-sm">{(game.odds_30m * 100).toFixed(0)}%</span>
+                                  {game.checkpoint_30m_ts && (
+                                    <span className="text-gray-500 text-xs">
+                                      {format(new Date(game.checkpoint_30m_ts * 1000), 'h:mm a')}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-gray-600 text-xs">Pending</span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          {game.is_eligible === null ? (
+                            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-gray-500/20 text-gray-400 border border-gray-500/50">
+                              Pending
+                            </span>
+                          ) : game.is_eligible ? (
+                            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-green-500/20 text-green-400 border border-green-500/50">
+                              ✓ Eligible
+                            </span>
                           ) : (
-                            <span className="text-gray-500">N/A</span>
+                            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-red-500/20 text-red-400 border border-red-500/50">
+                              ✗ Not Eligible
+                            </span>
                           )}
                         </td>
                         <td className="px-6 py-4">

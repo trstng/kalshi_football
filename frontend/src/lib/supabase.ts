@@ -15,6 +15,14 @@ export type Game = {
   kickoff_ts: number
   halftime_ts: number
   pregame_prob: number | null
+  // Three-checkpoint system
+  odds_6h: number | null
+  odds_3h: number | null
+  odds_30m: number | null
+  checkpoint_6h_ts: number | null
+  checkpoint_3h_ts: number | null
+  checkpoint_30m_ts: number | null
+  is_eligible: boolean | null
   status: 'monitoring' | 'triggered' | 'completed' | 'timeout'
   created_at: string
   updated_at: string
