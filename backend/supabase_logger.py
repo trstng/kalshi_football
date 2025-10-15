@@ -207,3 +207,40 @@ class SupabaseLogger:
 
         except Exception as e:
             logger.error(f"Error logging bankroll change: {e}")
+
+    def log_price_tick(self, market_ticker: str, timestamp: int, favorite_price: float,
+                       yes_ask: Optional[int] = None, no_ask: Optional[int] = None):
+        """
+        Log a price tick for historical data collection.
+
+        Args:
+            market_ticker: Market ticker to identify the game
+            timestamp: Unix timestamp when price was captured
+            favorite_price: Favorite's probability (0-1)
+            yes_ask: Price to buy YES in cents
+            no_ask: Price to buy NO in cents
+        """
+        if not self.client:
+            return
+
+        try:
+            # Get game_id from market_ticker
+            game = self.client.table('games').select('id').eq('market_ticker', market_ticker).execute()
+
+            game_id = game.data[0]['id'] if game.data else None
+
+            data = {
+                'market_ticker': market_ticker,
+                'game_id': game_id,
+                'timestamp': timestamp,
+                'favorite_price': favorite_price,
+                'yes_ask': yes_ask,
+                'no_ask': no_ask
+            }
+
+            self.client.table('market_ticks').insert(data).execute()
+            # Only log at debug level to avoid spam (happens every 10 seconds)
+            logger.debug(f"Logged price tick: {market_ticker} @ {favorite_price:.0%}")
+
+        except Exception as e:
+            logger.error(f"Error logging price tick: {e}")

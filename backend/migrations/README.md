@@ -14,7 +14,7 @@ This directory contains SQL migration scripts for the Supabase database.
 
 ### 001_add_checkpoint_columns.sql
 **Date**: 2025-10-15
-**Status**: Pending
+**Status**: Applied
 
 Adds the three-checkpoint trading system:
 - `odds_6h`, `odds_3h`, `odds_30m` - Odds captured at each checkpoint
@@ -24,3 +24,13 @@ Adds the three-checkpoint trading system:
 **Eligibility Rules**:
 - If ANY checkpoint >= 57% → Eligible
 - BUT if odds_30m < 57% → NOT eligible (final veto)
+
+### 002_add_market_ticks_table.sql
+**Date**: 2025-10-15
+**Status**: Pending
+
+Adds tick data collection for backtesting:
+- `market_ticks` table - Stores price snapshots captured every 10 seconds
+- Captures: timestamp, favorite_price, yes_ask, no_ask
+- Linked to games table via game_id foreign key
+- Automatically populated by live trader during monitoring

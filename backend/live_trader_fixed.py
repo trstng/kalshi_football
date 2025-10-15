@@ -619,6 +619,26 @@ class LiveTrader:
                     # Check and capture checkpoints (6h, 3h, 30m before kickoff)
                     self.check_and_capture_checkpoint(game, now)
 
+                    # Log price tick for historical data (backtesting)
+                    if self.supabase.client:
+                        try:
+                            market = self.public_client.get_market(game.market_ticker)
+                            if market:
+                                yes_ask = market.yes_ask if market.yes_ask is not None else 0
+                                no_ask = market.no_ask if market.no_ask is not None else 0
+                                favorite_price = max(yes_ask, no_ask) / 100.0 if max(yes_ask, no_ask) > 0 else None
+
+                                if favorite_price:
+                                    self.supabase.log_price_tick(
+                                        market_ticker=game.market_ticker,
+                                        timestamp=now,
+                                        favorite_price=favorite_price,
+                                        yes_ask=yes_ask,
+                                        no_ask=no_ask
+                                    )
+                        except Exception as e:
+                            logger.debug(f"Error logging tick for {game.market_ticker}: {e}")
+
                     if not game.triggered and self.check_entry_signal(game):
                         active_positions = sum(1 for g in self.active_games.values() if g.positions)
                         max_concurrent = self.config['risk']['max_concurrent_games']
