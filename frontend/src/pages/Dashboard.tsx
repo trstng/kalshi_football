@@ -80,8 +80,6 @@ export default function Dashboard() {
     }
   }
 
-  const totalExposure = openPositions.reduce((sum, pos) => sum + (pos.entry_price * pos.size / 100), 0)
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-8">
       <div className="max-w-7xl mx-auto">
