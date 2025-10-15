@@ -369,18 +369,12 @@ class LiveTrader:
         if not game.is_eligible:
             return False
 
-        current_price = self.get_current_price(game.market_ticker)
-        if current_price is None:
-            return False
-
-        trigger_threshold = self.config['trading']['trigger_threshold']
-        if current_price < trigger_threshold:
-            return True
-
-        return False
+        # Once eligible, place all limit orders immediately
+        # (Kalshi will fill them as price drops through each level)
+        return True
 
     def enter_position(self, game: GameMonitor):
-        """Enter position with scaling strategy."""
+        """Enter position with limit order ladder strategy."""
         logger.info("=" * 80)
         logger.info(f"ENTRY SIGNAL: {game.market_title} ({game.yes_subtitle})")
         logger.info("=" * 80)
@@ -393,25 +387,19 @@ class LiveTrader:
         current_price_cents = int(current_price * 100)
 
         logger.info(f"Pregame: {game.pregame_prob:.0%} → Current: {current_price:.0%}")
+        logger.info(f"Placing limit order ladder (Kalshi will fill as price drops)")
 
+        # Use ALL scaling levels from config (don't filter by current price)
         scaling_levels = self.config['trading']['scaling_levels']
-        levels_to_hit = [
-            level for level in scaling_levels
-            if current_price_cents <= level['trigger']
-        ]
 
-        if not levels_to_hit:
-            logger.info("No scaling levels triggered, skipping")
-            return
-
-        logger.info(f"Scaling levels hit: {len(levels_to_hit)}")
+        logger.info(f"Limit orders to place: {len(scaling_levels)} levels")
 
         positions = self.calculate_position_sizes(
             self.bankroll,
             self.config['trading']['kelly_fraction'],
             self.config['trading']['max_exposure_pct'],
             current_price_cents,
-            levels_to_hit
+            scaling_levels  # Use ALL levels, not filtered by current price
         )
 
         total_capital = sum(price * size / 100.0 for price, size in positions)
