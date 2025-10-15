@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase, type BankrollHistory } from '../lib/supabase'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts'
+import { Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts'
 import { format } from 'date-fns'
 
 export default function Analytics() {
