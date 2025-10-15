@@ -28,6 +28,20 @@ export type Game = {
   updated_at: string
 }
 
+export type Order = {
+  id: string
+  game_id: string
+  market_ticker: string
+  order_id: string
+  price: number
+  size: number
+  filled_size: number
+  status: 'pending' | 'filled' | 'partially_filled' | 'cancelled'
+  side: 'buy' | 'sell'
+  created_at: string
+  updated_at: string
+}
+
 export type Position = {
   id: string
   game_id: string
