@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts'
+import { useEffect, useState, useMemo } from 'react'
+import { ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line, Legend } from 'recharts'
 import { supabase, type MarketTick, type Game } from '../lib/supabase'
 import { format } from 'date-fns'
 
@@ -7,11 +7,50 @@ type MarketChartProps = {
   game: Game
 }
 
-type ChartDataPoint = {
+type CandlestickData = {
   timestamp: number
   time: string
-  price: number
-  pricePercent: number
+  open: number
+  high: number
+  low: number
+  close: number
+  yesAskOpen: number
+  yesAskClose: number
+  noAskOpen: number
+  noAskClose: number
+}
+
+// Custom candlestick shape component
+const Candlestick = (props: any) => {
+  const { x, y, width, height, open, close, high, low, fill } = props
+  const isGreen = close > open
+  const color = isGreen ? '#10b981' : '#ef4444'
+  const bodyHeight = Math.abs(close - open) || 1
+  const bodyY = Math.min(y + (isGreen ? (high - close) : (high - open)), y + height - 1)
+
+  return (
+    <g>
+      {/* High-Low wick */}
+      <line
+        x1={x + width / 2}
+        y1={y}
+        x2={x + width / 2}
+        y2={y + height}
+        stroke={color}
+        strokeWidth={1}
+      />
+      {/* Open-Close body */}
+      <rect
+        x={x}
+        y={bodyY}
+        width={width}
+        height={bodyHeight}
+        fill={color}
+        stroke={color}
+        strokeWidth={1}
+      />
+    </g>
+  )
 }
 
 export default function MarketChart({ game }: MarketChartProps) {
@@ -57,12 +96,43 @@ export default function MarketChart({ game }: MarketChartProps) {
     setLoading(false)
   }
 
-  const chartData: ChartDataPoint[] = ticks.map(tick => ({
-    timestamp: tick.timestamp,
-    time: format(new Date(tick.timestamp * 1000), 'HH:mm:ss'),
-    price: tick.favorite_price,
-    pricePercent: tick.favorite_price * 100
-  }))
+  // Aggregate ticks into 1-minute candlesticks for better visualization
+  const chartData: CandlestickData[] = useMemo(() => {
+    if (ticks.length === 0) return []
+
+    // Group by 1-minute buckets
+    const buckets = new Map<number, MarketTick[]>()
+
+    ticks.forEach(tick => {
+      const bucketTime = Math.floor(tick.timestamp / 60) * 60 // Round to minute
+      if (!buckets.has(bucketTime)) {
+        buckets.set(bucketTime, [])
+      }
+      buckets.get(bucketTime)!.push(tick)
+    })
+
+    // Create candlestick data
+    return Array.from(buckets.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([timestamp, ticksInBucket]) => {
+        const prices = ticksInBucket.map(t => t.favorite_price * 100)
+        const yesAsks = ticksInBucket.map(t => t.yes_ask || 0)
+        const noAsks = ticksInBucket.map(t => t.no_ask || 0)
+
+        return {
+          timestamp,
+          time: format(new Date(timestamp * 1000), 'HH:mm'),
+          open: prices[0],
+          high: Math.max(...prices),
+          low: Math.min(...prices),
+          close: prices[prices.length - 1],
+          yesAskOpen: yesAsks[0],
+          yesAskClose: yesAsks[yesAsks.length - 1],
+          noAskOpen: noAsks[0],
+          noAskClose: noAsks[noAsks.length - 1],
+        }
+      })
+  }, [ticks])
 
   if (loading) {
     return (
@@ -84,18 +154,19 @@ export default function MarketChart({ game }: MarketChartProps) {
     )
   }
 
-  const minPrice = Math.min(...chartData.map(d => d.pricePercent))
-  const maxPrice = Math.max(...chartData.map(d => d.pricePercent))
-  const yDomain = [Math.floor(minPrice - 5), Math.ceil(maxPrice + 5)]
+  const minPrice = chartData.length > 0 ? Math.min(...chartData.map(d => d.low)) : 0
+  const maxPrice = chartData.length > 0 ? Math.max(...chartData.map(d => d.high)) : 100
+  const currentPrice = chartData.length > 0 ? chartData[chartData.length - 1].close : 0
+  const yDomain = [Math.max(0, Math.floor(minPrice - 5)), Math.min(100, Math.ceil(maxPrice + 5))]
 
   return (
     <div className="space-y-4">
       {/* Chart Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
-          <div className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-1">Current Price</div>
+          <div className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-1">Current</div>
           <div className="text-2xl font-bold text-white">
-            {(ticks[ticks.length - 1].favorite_price * 100).toFixed(1)}%
+            {currentPrice.toFixed(1)}%
           </div>
         </div>
         <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
@@ -110,66 +181,162 @@ export default function MarketChart({ game }: MarketChartProps) {
             {minPrice.toFixed(1)}%
           </div>
         </div>
+        <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+          <div className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-1">Candles</div>
+          <div className="text-2xl font-bold text-purple-400">
+            {chartData.length}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">{ticks.length} raw ticks</div>
+        </div>
       </div>
 
-      {/* Chart */}
+      {/* Candlestick Chart */}
       <div className="bg-slate-800/50 rounded-lg p-6 border border-slate-700/50">
-        <ResponsiveContainer width="100%" height={400}>
-          <AreaChart data={chartData}>
-            <defs>
-              <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
-              </linearGradient>
-            </defs>
+        <ResponsiveContainer width="100%" height={500}>
+          <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 30 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
             <XAxis
               dataKey="time"
               stroke="#94a3b8"
-              style={{ fontSize: '12px' }}
+              style={{ fontSize: '11px' }}
+              interval="preserveStartEnd"
               tickFormatter={(value, index) => {
-                // Show every 10th tick to avoid crowding
-                return index % Math.ceil(chartData.length / 10) === 0 ? value : ''
+                // Show every nth tick based on data length
+                const interval = Math.max(1, Math.floor(chartData.length / 15))
+                return index % interval === 0 ? value : ''
               }}
             />
             <YAxis
               stroke="#94a3b8"
-              style={{ fontSize: '12px' }}
+              style={{ fontSize: '11px' }}
               domain={yDomain}
               tickFormatter={(value) => `${value}%`}
             />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#1e293b',
-                border: '1px solid #334155',
-                borderRadius: '8px',
-                padding: '12px'
+            <Legend
+              wrapperStyle={{ paddingTop: '10px' }}
+              iconType="line"
+              formatter={(value) => {
+                if (value === 'yesAskClose') return 'Yes Ask'
+                if (value === 'noAskClose') return 'No Ask'
+                return value
               }}
-              labelStyle={{ color: '#94a3b8', fontWeight: 'bold', marginBottom: '4px' }}
-              itemStyle={{ color: '#a78bfa', fontWeight: 'bold' }}
-              formatter={(value: number) => [`${value.toFixed(2)}%`, 'Price']}
             />
-            <Area
-              type="monotone"
-              dataKey="pricePercent"
-              stroke="#a78bfa"
-              strokeWidth={2}
-              fill="url(#colorPrice)"
+            <Tooltip
+              content={(props: any) => {
+                if (!props.active || !props.payload || !props.payload[0]) return null
+                const data = props.payload[0].payload
+                const isUp = data.close >= data.open
+                return (
+                  <div className="bg-slate-900/95 border border-slate-700 rounded-lg p-3 shadow-xl">
+                    <div className="text-gray-400 text-xs font-bold mb-2">{data.time}</div>
+                    <div className="space-y-1 text-sm">
+                      <div className="text-gray-400 text-xs font-semibold uppercase mb-1">Favorite Price</div>
+                      <div className="flex justify-between gap-4">
+                        <span className="text-gray-500">Open:</span>
+                        <span className="text-white font-semibold">{data.open.toFixed(2)}%</span>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <span className="text-gray-500">High:</span>
+                        <span className="text-green-400 font-semibold">{data.high.toFixed(2)}%</span>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <span className="text-gray-500">Low:</span>
+                        <span className="text-red-400 font-semibold">{data.low.toFixed(2)}%</span>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <span className="text-gray-500">Close:</span>
+                        <span className={`font-semibold ${isUp ? 'text-green-400' : 'text-red-400'}`}>
+                          {data.close.toFixed(2)}%
+                        </span>
+                      </div>
+                      <div className="border-t border-slate-700 mt-2 pt-2">
+                        <div className="flex justify-between gap-4">
+                          <span className="text-blue-400">Yes Ask:</span>
+                          <span className="text-blue-300 font-semibold">{data.yesAskClose.toFixed(2)}¢</span>
+                        </div>
+                        <div className="flex justify-between gap-4">
+                          <span className="text-amber-400">No Ask:</span>
+                          <span className="text-amber-300 font-semibold">{data.noAskClose.toFixed(2)}¢</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              }}
             />
+            {/* Render candlesticks using custom shape */}
+            <Bar
+              dataKey="high"
+              fill="transparent"
+              shape={(props: any) => {
+                const data = chartData[props.index]
+                if (!data) return null
+
+                const { x, y, width, height } = props
+                const isGreen = data.close >= data.open
+                const color = isGreen ? '#10b981' : '#ef4444'
+
+                // Calculate pixel positions for price levels
+                const highY = y
+                const lowY = y + height
+                const openY = y + ((data.high - data.open) / (data.high - data.low)) * height
+                const closeY = y + ((data.high - data.close) / (data.high - data.low)) * height
+
+                const bodyTop = Math.min(openY, closeY)
+                const bodyHeight = Math.max(Math.abs(closeY - openY), 2)
+
+                return (
+                  <g key={`candle-${props.index}`}>
+                    {/* High-Low wick */}
+                    <line
+                      x1={x + width / 2}
+                      y1={highY}
+                      x2={x + width / 2}
+                      y2={lowY}
+                      stroke={color}
+                      strokeWidth={1.5}
+                      opacity={0.5}
+                    />
+                    {/* Open-Close body */}
+                    <rect
+                      x={x + 2}
+                      y={bodyTop}
+                      width={Math.max(width - 4, 4)}
+                      height={bodyHeight}
+                      fill={color}
+                      stroke={color}
+                      strokeWidth={1}
+                      opacity={0.5}
+                    />
+                  </g>
+                )
+              }}
+            />
+            {/* Yes Ask Line */}
             <Line
               type="monotone"
-              dataKey="pricePercent"
-              stroke="#a78bfa"
-              strokeWidth={3}
+              dataKey="yesAskClose"
+              stroke="#3b82f6"
+              strokeWidth={2}
               dot={false}
+              name="Yes Ask"
             />
-          </AreaChart>
+            {/* No Ask Line */}
+            <Line
+              type="monotone"
+              dataKey="noAskClose"
+              stroke="#f59e0b"
+              strokeWidth={2}
+              dot={false}
+              name="No Ask"
+            />
+          </ComposedChart>
         </ResponsiveContainer>
       </div>
 
-      {/* Data Points Count */}
+      {/* Data Info */}
       <div className="text-center text-gray-500 text-sm">
-        {ticks.length} data points • Updated every 10 seconds
+        Candlesticks show Favorite Price (OHLC) • Lines show Yes Ask (blue) & No Ask (orange) • 1-minute intervals • {ticks.length} raw ticks
       </div>
     </div>
   )
