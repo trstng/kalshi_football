@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts'
+import { Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts'
 import { supabase, type MarketTick, type Game } from '../lib/supabase'
 import { format } from 'date-fns'
 
