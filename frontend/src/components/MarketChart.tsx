@@ -20,39 +20,6 @@ type CandlestickData = {
   noAskClose: number
 }
 
-// Custom candlestick shape component
-const Candlestick = (props: any) => {
-  const { x, y, width, height, open, close, high, low, fill } = props
-  const isGreen = close > open
-  const color = isGreen ? '#10b981' : '#ef4444'
-  const bodyHeight = Math.abs(close - open) || 1
-  const bodyY = Math.min(y + (isGreen ? (high - close) : (high - open)), y + height - 1)
-
-  return (
-    <g>
-      {/* High-Low wick */}
-      <line
-        x1={x + width / 2}
-        y1={y}
-        x2={x + width / 2}
-        y2={y + height}
-        stroke={color}
-        strokeWidth={1}
-      />
-      {/* Open-Close body */}
-      <rect
-        x={x}
-        y={bodyY}
-        width={width}
-        height={bodyHeight}
-        fill={color}
-        stroke={color}
-        strokeWidth={1}
-      />
-    </g>
-  )
-}
-
 export default function MarketChart({ game }: MarketChartProps) {
   const [ticks, setTicks] = useState<MarketTick[]>([])
   const [loading, setLoading] = useState(true)
@@ -270,7 +237,7 @@ export default function MarketChart({ game }: MarketChartProps) {
               fill="transparent"
               shape={(props: any) => {
                 const data = chartData[props.index]
-                if (!data) return null
+                if (!data) return <g />
 
                 const { x, y, width, height } = props
                 const isGreen = data.close >= data.open
