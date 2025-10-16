@@ -64,6 +64,9 @@ class GameMonitor:
     # Eligibility for trading
     is_eligible: Optional[bool] = None  # None = not yet determined
 
+    # Trading side (which side we're buying: yes or no)
+    position_side: Optional[str] = None  # "yes" or "no" - the favorite side we're buying
+
     # Order tracking
     triggered: bool = False  # Have we placed orders yet?
     order_ids: list = field(default_factory=list)  # Pending order IDs
@@ -74,6 +77,7 @@ class GameMonitor:
 class Position:
     """Represents an open position."""
     market_ticker: str
+    side: str  # "yes" or "no"
     entry_price: int
     size: int
     entry_time: int
@@ -234,6 +238,23 @@ class LiveTrader:
             logger.error(f"Error fetching price for {market_ticker}: {e}")
             return None
 
+    def get_favorite_side(self, market_ticker: str) -> Optional[str]:
+        """Determine which side (yes/no) represents the favorite."""
+        try:
+            market = self.public_client.get_market(market_ticker)
+            if not market:
+                return None
+
+            # Get best ask prices for both sides (price to BUY)
+            yes_ask = market.yes_ask if market.yes_ask is not None else 0
+            no_ask = market.no_ask if market.no_ask is not None else 0
+
+            # Return the side with higher probability (the favorite)
+            return "yes" if yes_ask >= no_ask else "no"
+        except Exception as e:
+            logger.error(f"Error determining favorite side for {market_ticker}: {e}")
+            return None
+
     def check_and_capture_checkpoint(self, game: GameMonitor, now: int) -> bool:
         """
         Check if we need to capture a checkpoint and do so.
@@ -386,9 +407,16 @@ class LiveTrader:
             logger.error("Could not get current price, skipping")
             return
 
+        # Determine which side to buy (yes or no) - we always want the FAVORITE
+        favorite_side = self.get_favorite_side(game.market_ticker)
+        if favorite_side is None:
+            logger.error("Could not determine favorite side, skipping")
+            return
+
         current_price_cents = int(current_price * 100)
 
         logger.info(f"Pregame: {game.pregame_prob:.0%} → Current: {current_price:.0%}")
+        logger.info(f"Buying {favorite_side.upper()} (the favorite)")
         logger.info(f"Placing limit order ladder (Kalshi will fill as price drops)")
 
         # Use ALL scaling levels from config (don't filter by current price)
@@ -422,7 +450,7 @@ class LiveTrader:
                 try:
                     order = self.trading_client.place_order(
                         market_ticker=game.market_ticker,
-                        side="yes",
+                        side=favorite_side,  # Buy the favorite side (yes or no)
                         action="buy",
                         count=size,
                         price=price_cents,
@@ -445,6 +473,7 @@ class LiveTrader:
                     logger.error(f"  ✗ Error placing order: {e}")
 
         game.triggered = True
+        game.position_side = favorite_side  # Store which side we're trading
         game.highest_entry = max(p[0] for p in positions)
         self.total_exposure += total_capital
 
@@ -493,6 +522,7 @@ class LiveTrader:
                     if not existing_position:
                         position = Position(
                             market_ticker=game.market_ticker,
+                            side=game.position_side,  # Use the side we determined at entry
                             entry_price=price,
                             size=filled_count,
                             entry_time=int(time.time()),
@@ -578,7 +608,7 @@ class LiveTrader:
                 try:
                     order = self.trading_client.place_order(
                         market_ticker=game.market_ticker,
-                        side="yes",
+                        side=position.side,  # Sell the same side we bought
                         action="sell",
                         count=position.size,
                         price=current_price_cents,
