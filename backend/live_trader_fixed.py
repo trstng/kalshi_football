@@ -665,8 +665,9 @@ class LiveTrader:
                     # Check and capture checkpoints (6h, 3h, 30m before kickoff)
                     self.check_and_capture_checkpoint(game, now)
 
-                    # Log price tick for historical data (backtesting)
-                    if self.supabase.client:
+                    # Log price tick ONLY for in-game data (after kickoff)
+                    # Pregame polling is sparse (only 3 checkpoint polls)
+                    if self.supabase.client and now >= game.kickoff_ts:
                         try:
                             market = self.public_client.get_market(game.market_ticker)
                             if market:

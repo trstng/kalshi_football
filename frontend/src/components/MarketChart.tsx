@@ -51,10 +51,13 @@ export default function MarketChart({ game }: MarketChartProps) {
 
   async function fetchMarketTicks() {
     setLoading(true)
+
+    // Only fetch ticks from kickoff onwards (in-game data only)
     const { data } = await supabase
       .from('market_ticks')
       .select('*')
       .eq('market_ticker', game.market_ticker)
+      .gte('timestamp', game.kickoff_ts)
       .order('timestamp', { ascending: true })
 
     if (data) {
@@ -109,14 +112,120 @@ export default function MarketChart({ game }: MarketChartProps) {
     )
   }
 
+  // Check if game has kicked off
+  const now = Math.floor(Date.now() / 1000)
+  const hasKickedOff = now >= game.kickoff_ts
+  const timeToKickoff = game.kickoff_ts - now
+
+  // Pregame view: Show checkpoint system
+  if (!hasKickedOff) {
+    const checkpoints = [
+      { label: '6 Hours', odds: game.odds_6h, timestamp: game.checkpoint_6h_ts },
+      { label: '3 Hours', odds: game.odds_3h, timestamp: game.checkpoint_3h_ts },
+      { label: '30 Minutes', odds: game.odds_30m, timestamp: game.checkpoint_30m_ts }
+    ]
+
+    const hoursUntilKickoff = Math.floor(timeToKickoff / 3600)
+    const minutesUntilKickoff = Math.floor((timeToKickoff % 3600) / 60)
+
+    return (
+      <div className="space-y-6">
+        {/* Pregame Status */}
+        <div className="bg-slate-800/50 rounded-lg p-6 border border-slate-700/50">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-xl font-bold text-white mb-1">Pregame Monitoring</h3>
+              <p className="text-gray-400 text-sm">
+                Kickoff in {hoursUntilKickoff}h {minutesUntilKickoff}m • Checking eligibility
+              </p>
+            </div>
+            <div className="flex items-center gap-2 px-4 py-2 bg-blue-500/20 border border-blue-500/30 rounded-lg">
+              <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
+              <span className="text-blue-400 text-sm font-semibold">Monitoring</span>
+            </div>
+          </div>
+
+          {/* Checkpoint Grid */}
+          <div className="grid grid-cols-3 gap-4">
+            {checkpoints.map((checkpoint, idx) => (
+              <div
+                key={idx}
+                className={`rounded-lg p-4 border transition-all ${
+                  checkpoint.odds !== null
+                    ? 'bg-slate-700/50 border-slate-600'
+                    : 'bg-slate-800/30 border-slate-700/30 opacity-50'
+                }`}
+              >
+                <div className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">
+                  {checkpoint.label}
+                </div>
+                {checkpoint.odds !== null ? (
+                  <>
+                    <div className={`text-3xl font-bold mb-1 ${
+                      checkpoint.odds >= 0.57 ? 'text-green-400' : 'text-gray-300'
+                    }`}>
+                      {(checkpoint.odds * 100).toFixed(1)}%
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {checkpoint.timestamp && format(new Date(checkpoint.timestamp * 1000), 'HH:mm:ss')}
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-2xl text-gray-600">—</div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Eligibility Status */}
+          {game.is_eligible !== null && (
+            <div className={`mt-4 p-4 rounded-lg border ${
+              game.is_eligible
+                ? 'bg-green-500/10 border-green-500/30'
+                : 'bg-red-500/10 border-red-500/30'
+            }`}>
+              <div className="flex items-center gap-2">
+                {game.is_eligible ? (
+                  <>
+                    <svg className="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                    <span className="text-green-400 font-semibold">Eligible for Trading</span>
+                    <span className="text-gray-400 text-sm ml-auto">Orders will be placed if odds drop below 50%</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                    </svg>
+                    <span className="text-red-400 font-semibold">Not Eligible</span>
+                    <span className="text-gray-400 text-sm ml-auto">No checkpoint reached 57% threshold</span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Info Card */}
+        <div className="bg-slate-800/30 rounded-lg p-4 border border-slate-700/30">
+          <p className="text-gray-400 text-sm">
+            <span className="font-semibold text-white">Pregame Monitoring:</span> The bot checks odds at 3 key checkpoints (6h, 3h, 30m before kickoff) to determine if this game qualifies for trading. In-game price streaming will begin after kickoff for visualization and backtesting data.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // In-game: No ticks yet
   if (ticks.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-96 gap-3">
         <svg className="w-16 h-16 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
         </svg>
-        <p className="text-gray-400 text-lg">No market data yet</p>
-        <p className="text-gray-500 text-sm">Price history will appear once monitoring begins</p>
+        <p className="text-gray-400 text-lg">Game Started - Waiting for price data</p>
+        <p className="text-gray-500 text-sm">In-game price ticks will appear shortly</p>
       </div>
     )
   }
