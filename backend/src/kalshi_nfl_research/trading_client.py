@@ -3,10 +3,11 @@ Kalshi Trading API Client for placing real orders.
 """
 import logging
 import time
+import uuid
 from typing import Optional, Literal
 from dataclasses import dataclass
 
-from kalshi_python import Configuration, KalshiClient as OfficialKalshiClient, PortfolioApi, CreateOrderRequest
+from kalshi_python import Configuration, KalshiClient as OfficialKalshiClient, PortfolioApi
 
 logger = logging.getLogger(__name__)
 
@@ -99,20 +100,19 @@ class KalshiTradingClient:
             f"Placing order: {action} {count} {side} @ {price}¢ on {market_ticker}"
         )
 
-        # Create order request using official client
-        order_request = CreateOrderRequest(
+        # Generate unique client order ID
+        client_order_id = f"order_{int(time.time())}_{str(uuid.uuid4())[:8]}"
+
+        # Place order through official API (pass as keyword arguments)
+        response = self.portfolio_api.create_order(
             ticker=market_ticker,
+            client_order_id=client_order_id,
             side=side,
             action=action,
             count=count,
             type=order_type,
             yes_price=price if side == "yes" else None,
             no_price=price if side == "no" else None,
-        )
-
-        # Place order through official API
-        response = self.portfolio_api.create_order(
-            create_order_request=order_request
         )
 
         # Convert response to our Order dataclass
