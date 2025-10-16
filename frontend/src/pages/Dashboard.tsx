@@ -50,7 +50,14 @@ export default function Dashboard() {
       .select('*')
       .in('status', ['monitoring', 'triggered'])
       .order('kickoff_ts', { ascending: true })
-    if (data) setActiveGames(data)
+
+    if (data) {
+      // Filter out games where kickoff was more than 6 hours ago
+      const now = Math.floor(Date.now() / 1000)
+      const sixHoursAgo = now - (6 * 3600)
+      const activeGames = data.filter(game => game.kickoff_ts > sixHoursAgo)
+      setActiveGames(activeGames)
+    }
   }
 
   async function fetchOpenOrders() {
