@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { supabase, type Game, type Position, type Order } from '../lib/supabase'
 import { format } from 'date-fns'
+import GameDetailModal from '../components/GameDetailModal'
 
 export default function Dashboard() {
   const [activeGames, setActiveGames] = useState<Game[]>([])
   const [openOrders, setOpenOrders] = useState<Order[]>([])
   const [openPositions, setOpenPositions] = useState<Position[]>([])
   const [currentBankroll, setCurrentBankroll] = useState(500)
+  const [selectedGame, setSelectedGame] = useState<Game | null>(null)
 
   useEffect(() => {
     fetchActiveGames()
@@ -195,7 +197,11 @@ export default function Dashboard() {
                     </tr>
                   ) : (
                     activeGames.map((game) => (
-                      <tr key={game.id} className="border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors">
+                      <tr
+                        key={game.id}
+                        className="border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors cursor-pointer"
+                        onClick={() => setSelectedGame(game)}
+                      >
                         <td className="px-6 py-4">
                           <div className="font-bold text-white text-lg">{game.market_title}</div>
                           <div className="text-gray-500 text-sm">{game.yes_subtitle}</div>
@@ -458,6 +464,14 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Game Detail Modal */}
+      {selectedGame && (
+        <GameDetailModal
+          game={selectedGame}
+          onClose={() => setSelectedGame(null)}
+        />
+      )}
     </div>
   )
 }

@@ -75,3 +75,14 @@ export type BankrollHistory = {
   description: string | null
   created_at: string
 }
+
+export type MarketTick = {
+  id: string
+  market_ticker: string
+  game_id: string | null
+  timestamp: number
+  favorite_price: number
+  yes_ask: number | null
+  no_ask: number | null
+  created_at: string
+}
