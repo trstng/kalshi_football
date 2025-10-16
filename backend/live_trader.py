@@ -53,7 +53,10 @@ class Position:
     entry_price: int  # cents
     size: int  # number of contracts
     entry_time: int  # unix timestamp
-    order_id: Optional[str] = None
+    buy_order_id: Optional[str] = None
+    buy_filled: bool = False
+    sell_order_id: Optional[str] = None
+    sell_filled: bool = False
 
 
 class LiveTrader:
@@ -184,6 +187,77 @@ class LiveTrader:
         except Exception as e:
             logger.error(f"Error fetching price for {market_ticker}: {e}")
             return None
+
+    def check_order_fills(self, game: GameMonitor) -> list[Position]:
+        """
+        Check which buy orders have been filled.
+
+        Returns:
+            List of positions that were just filled
+        """
+        newly_filled = []
+
+        for position in game.positions:
+            # Skip if already checked as filled
+            if position.buy_filled:
+                continue
+
+            # Skip if no order ID (shouldn't happen)
+            if not position.buy_order_id:
+                continue
+
+            # Check order status
+            if self.config['risk']['dry_run']:
+                # In dry run, assume orders fill immediately
+                position.buy_filled = True
+                newly_filled.append(position)
+            else:
+                try:
+                    status = self.trading_client.get_order_status(position.buy_order_id)
+                    if status.get('status') == 'filled':
+                        position.buy_filled = True
+                        newly_filled.append(position)
+                        logger.info(f"✓ Buy order filled: {position.size} @ {position.entry_price}¢")
+                except Exception as e:
+                    logger.error(f"Error checking order status for {position.buy_order_id}: {e}")
+
+        return newly_filled
+
+    def place_exit_orders(self, position: Position):
+        """
+        Place limit sell orders at target exit prices.
+        This implements a bracket/take-profit strategy.
+        """
+        # Get the first (lowest) revert band as our exit target
+        revert_bands = self.config['trading']['revert_bands']
+        if not revert_bands:
+            logger.warning("No revert bands configured, skipping exit order placement")
+            return
+
+        # Use the first revert band (typically 0.55)
+        exit_price = revert_bands[0]
+        exit_price_cents = int(exit_price * 100)
+
+        logger.info(f"Placing exit order: {position.size} @ {exit_price_cents}¢")
+
+        if self.config['risk']['dry_run']:
+            logger.info("  [DRY RUN] Would place exit order here")
+            position.sell_order_id = f"dry_run_sell_{position.buy_order_id}"
+        else:
+            try:
+                order = self.trading_client.place_order(
+                    market_ticker=position.market_ticker,
+                    side="yes",
+                    action="sell",
+                    count=position.size,
+                    price=exit_price_cents,
+                    order_type="limit"
+                )
+                position.sell_order_id = order.order_id
+                logger.info(f"  ✓ Exit order placed: {order.order_id}")
+
+            except Exception as e:
+                logger.error(f"  ✗ Error placing exit order: {e}")
 
     def calculate_position_sizes(
         self,
@@ -325,7 +399,7 @@ class LiveTrader:
                     entry_price=price_cents,
                     size=size,
                     entry_time=int(time.time()),
-                    order_id=f"dry_run_{len(game.positions)}"
+                    buy_order_id=f"dry_run_{len(game.positions)}"
                 )
                 game.positions.append(position)
 
@@ -346,7 +420,7 @@ class LiveTrader:
                         entry_price=price_cents,
                         size=size,
                         entry_time=int(time.time()),
-                        order_id=order.order_id
+                        buy_order_id=order.order_id
                     )
                     game.positions.append(position)
 
@@ -364,27 +438,46 @@ class LiveTrader:
         logger.info("")
 
     def check_exit_signal(self, game: GameMonitor) -> bool:
-        """Check if we should exit position."""
+        """Check if we should exit position (via sell order fills or halftime)."""
         if not game.positions:
             return False
 
         now = int(datetime.utcnow().timestamp())
 
-        # Exit at halftime timeout
+        # Exit at halftime timeout (need to cancel pending sells and exit at market)
         if now >= game.halftime_ts:
             logger.info(f"Halftime timeout reached for {game.market_title}")
             return True
 
-        # Check revert bands
-        current_price = self.get_current_price(game.market_ticker)
-        if current_price is None:
-            return False
+        # Check if any sell orders have been filled
+        for position in game.positions:
+            if not position.sell_order_id:
+                continue
 
-        revert_bands = self.config['trading']['revert_bands']
-        for band in revert_bands:
-            if current_price >= band:
-                logger.info(f"Price reverted to {current_price:.0%} (band: {band:.0%})")
-                return True
+            if position.sell_filled:
+                continue
+
+            # Check sell order status
+            if self.config['risk']['dry_run']:
+                # In dry run, check if current price hit the target
+                current_price = self.get_current_price(game.market_ticker)
+                if current_price is None:
+                    continue
+
+                revert_bands = self.config['trading']['revert_bands']
+                if revert_bands and current_price >= revert_bands[0]:
+                    position.sell_filled = True
+                    logger.info(f"✓ [DRY RUN] Sell order would have filled @ {int(revert_bands[0] * 100)}¢")
+                    return True
+            else:
+                try:
+                    status = self.trading_client.get_order_status(position.sell_order_id)
+                    if status.get('status') == 'filled':
+                        position.sell_filled = True
+                        logger.info(f"✓ Sell order filled: {position.size} contracts")
+                        return True
+                except Exception as e:
+                    logger.error(f"Error checking sell order status for {position.sell_order_id}: {e}")
 
         return False
 
@@ -394,6 +487,23 @@ class LiveTrader:
         logger.info(f"EXIT SIGNAL: {game.market_title}")
         logger.info("=" * 80)
 
+        now = int(datetime.utcnow().timestamp())
+        is_halftime_timeout = now >= game.halftime_ts
+
+        if is_halftime_timeout:
+            logger.info("HALFTIME TIMEOUT - Cancelling pending sell orders and exiting at market")
+
+            # Cancel any pending sell orders
+            for position in game.positions:
+                if position.sell_order_id and not position.sell_filled:
+                    if not self.config['risk']['dry_run']:
+                        try:
+                            self.trading_client.cancel_order(position.sell_order_id)
+                            logger.info(f"  ✓ Cancelled sell order: {position.sell_order_id}")
+                        except Exception as e:
+                            logger.error(f"  ✗ Error cancelling order: {e}")
+
+        # Get current price for P&L calculation
         current_price = self.get_current_price(game.market_ticker)
         if current_price is None:
             logger.error("Could not get current price for exit")
@@ -405,19 +515,30 @@ class LiveTrader:
         total_contracts = 0
 
         for position in game.positions:
-            pnl_per_contract = (current_price_cents - position.entry_price) / 100.0
+            # Calculate P&L
+            if position.sell_filled:
+                # Sell order already filled at limit price
+                revert_bands = self.config['trading']['revert_bands']
+                exit_price_cents = int(revert_bands[0] * 100) if revert_bands else current_price_cents
+                pnl_per_contract = (exit_price_cents - position.entry_price) / 100.0
+                exit_reason = f"limit @ {exit_price_cents}¢"
+            else:
+                # Exiting at current market price (halftime timeout)
+                pnl_per_contract = (current_price_cents - position.entry_price) / 100.0
+                exit_reason = f"market @ {current_price_cents}¢"
+
             pnl_total = pnl_per_contract * position.size
 
             logger.info(
-                f"  Position: {position.size} @ {position.entry_price}¢ → {current_price_cents}¢ "
+                f"  Position: {position.size} @ {position.entry_price}¢ → {exit_reason} "
                 f"= ${pnl_total:+,.2f}"
             )
 
             total_pnl += pnl_total
             total_contracts += position.size
 
-            if not self.config['risk']['dry_run']:
-                # Place sell order
+            # If not already filled and not dry run, place market sell order
+            if not position.sell_filled and not self.config['risk']['dry_run']:
                 try:
                     order = self.trading_client.place_order(
                         market_ticker=game.market_ticker,
@@ -427,7 +548,7 @@ class LiveTrader:
                         price=current_price_cents,
                         order_type="limit"
                     )
-                    logger.info(f"  ✓ Sell order placed: {order.order_id}")
+                    logger.info(f"  ✓ Market sell order placed: {order.order_id}")
 
                 except Exception as e:
                     logger.error(f"  ✗ Error placing sell order: {e}")
@@ -481,6 +602,13 @@ class LiveTrader:
                             self.enter_position(game)
                         else:
                             logger.warning(f"Max concurrent games ({max_concurrent}) reached, skipping entry")
+
+                    # Check for buy order fills and place exit orders
+                    if game.positions:
+                        newly_filled = self.check_order_fills(game)
+                        for position in newly_filled:
+                            # Place exit order for this filled position
+                            self.place_exit_orders(position)
 
                     # Check for exit signal
                     if game.positions and self.check_exit_signal(game):
