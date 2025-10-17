@@ -38,6 +38,16 @@ export function Nav() {
               Dashboard
             </Link>
             <Link
+              to="/schedule"
+              className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all duration-200 ${
+                isActive('/schedule')
+                  ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg shadow-purple-500/50'
+                  : 'text-gray-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              Schedule
+            </Link>
+            <Link
               to="/history"
               className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all duration-200 ${
                 isActive('/history')

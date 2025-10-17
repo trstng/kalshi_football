@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import { Nav } from './components/Nav'
 import Dashboard from './pages/Dashboard'
+import Schedule from './pages/Schedule'
 import TradeHistory from './pages/TradeHistory'
 import Analytics from './pages/Analytics'
 
@@ -11,6 +12,7 @@ function App() {
         <Nav />
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/schedule" element={<Schedule />} />
           <Route path="/history" element={<TradeHistory />} />
           <Route path="/analytics" element={<Analytics />} />
         </Routes>

@@ -2,6 +2,7 @@
 artifacts/
 !artifacts/*_enriched.csv
 *.csv
+!frontend/public/schedules/*.csv
 *.parquet
 *.png
 *.md
