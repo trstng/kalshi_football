@@ -456,18 +456,47 @@ class LiveTrader:
                         price=price_cents,
                         order_type="limit"
                     )
-                    game.order_ids.append(order.order_id)
-                    logger.info(f"  ✓ Order placed: {order.order_id}")
+                    logger.info(f"  ✓ Order placed: {order.order_id} (status: {order.status})")
 
-                    # Log order to dashboard (NOT position - that happens when order fills)
-                    if self.supabase.client:
-                        self.supabase.log_order(
+                    # Check if order filled immediately
+                    if order.status == "executed":
+                        logger.info(f"  🎉 IMMEDIATE FILL: {size} contracts @ {price_cents}¢")
+                        # Create position immediately (don't add to pending orders)
+                        position = Position(
                             market_ticker=game.market_ticker,
-                            order_id=order.order_id,
-                            price=price_cents,
+                            side=favorite_side,
+                            entry_price=price_cents,
                             size=size,
-                            side='buy'
+                            entry_time=int(time.time()),
+                            order_id=order.order_id
                         )
+                        game.positions.append(position)
+
+                        # Log position to dashboard
+                        if self.supabase.client:
+                            try:
+                                self.supabase.log_position_entry({
+                                    'market_ticker': game.market_ticker,
+                                    'entry_price': price_cents,
+                                    'size': size,
+                                    'entry_time': int(time.time()),
+                                    'order_id': order.order_id
+                                })
+                            except Exception as db_error:
+                                logger.error(f"    ✗ Failed to log position to dashboard: {db_error}")
+                    else:
+                        # Order is pending - add to monitoring list
+                        game.order_ids.append(order.order_id)
+
+                        # Log order to dashboard (NOT position - that happens when order fills)
+                        if self.supabase.client:
+                            self.supabase.log_order(
+                                market_ticker=game.market_ticker,
+                                order_id=order.order_id,
+                                price=price_cents,
+                                size=size,
+                                side='buy'
+                            )
 
                 except Exception as e:
                     logger.error(f"  ✗ Error placing order: {e}")
@@ -492,11 +521,24 @@ class LiveTrader:
         if not self.trading_client:
             return
 
+        logger.info(f"Checking {len(game.order_ids)} pending order(s) for {game.market_ticker}")
         filled_orders = []
 
         for order_id in game.order_ids:
             try:
+                logger.info(f"  Checking order status: {order_id}")
                 status_response = self.trading_client.get_order_status(order_id)
+
+                # None means 404 - order was executed/cancelled and removed from active orders
+                if status_response is None:
+                    logger.info(f"  ⚠️  Order {order_id} not found (likely executed) - removing from pending list")
+                    filled_orders.append(order_id)
+                    continue
+
+                if not status_response or 'order' not in status_response:
+                    logger.error(f"  ✗ Invalid response for order {order_id}: {status_response}")
+                    continue
+
                 order_status = status_response.get('order', {})
 
                 status = order_status.get('status', 'pending')
@@ -504,12 +546,17 @@ class LiveTrader:
                 total_count = order_status.get('count', 0)
                 price = order_status.get('yes_price') or order_status.get('no_price', 0)
 
+                logger.info(f"    Status: {status}, Filled: {filled_count}/{total_count} @ {price}¢")
+
                 # Update order status in database
                 if self.supabase.client:
-                    if status == 'filled':
-                        self.supabase.update_order_status(order_id, 'filled', filled_count)
-                    elif filled_count > 0 and filled_count < total_count:
-                        self.supabase.update_order_status(order_id, 'partially_filled', filled_count)
+                    try:
+                        if status == 'filled':
+                            self.supabase.update_order_status(order_id, 'filled', filled_count)
+                        elif filled_count > 0 and filled_count < total_count:
+                            self.supabase.update_order_status(order_id, 'partially_filled', filled_count)
+                    except Exception as db_error:
+                        logger.error(f"    ✗ Failed to update dashboard for order {order_id}: {db_error}")
 
                 # Create position for filled orders
                 if filled_count > 0:
@@ -529,29 +576,74 @@ class LiveTrader:
                             order_id=order_id
                         )
                         game.positions.append(position)
-                        logger.info(f"  ✓ Order filled: {order_id} - {filled_count} @ {price}¢")
+                        logger.info(f"  ✓ NEW FILL: {filled_count} contracts @ {price}¢ (Order: {order_id})")
 
                         # Log position to dashboard
                         if self.supabase.client:
-                            self.supabase.log_position_entry({
-                                'market_ticker': game.market_ticker,
-                                'entry_price': price,
-                                'size': filled_count,
-                                'entry_time': int(time.time()),
-                                'order_id': order_id
-                            })
+                            try:
+                                self.supabase.log_position_entry({
+                                    'market_ticker': game.market_ticker,
+                                    'entry_price': price,
+                                    'size': filled_count,
+                                    'entry_time': int(time.time()),
+                                    'order_id': order_id
+                                })
+                            except Exception as db_error:
+                                logger.error(f"    ✗ Failed to log position to dashboard: {db_error}")
 
                 # Track fully filled orders to remove from pending list
                 if status == 'filled':
                     filled_orders.append(order_id)
 
             except Exception as e:
-                logger.debug(f"Error checking order status {order_id}: {e}")
+                logger.error(f"  ✗ ERROR checking order status for {order_id}: {e}")
+                import traceback
+                logger.error(f"    Traceback: {traceback.format_exc()}")
 
         # Remove fully filled orders from pending list
         for order_id in filled_orders:
             if order_id in game.order_ids:
                 game.order_ids.remove(order_id)
+                logger.info(f"  Removed fully filled order from pending list: {order_id}")
+
+    def cancel_pending_orders(self, game: GameMonitor):
+        """Cancel all unfilled orders for this game."""
+        if not game.order_ids:
+            return
+
+        if self.config['risk']['dry_run']:
+            logger.info(f"[DRY RUN] Would cancel {len(game.order_ids)} pending order(s)")
+            game.order_ids.clear()
+            return
+
+        if not self.trading_client:
+            return
+
+        logger.info(f"Cancelling {len(game.order_ids)} pending order(s) for {game.market_ticker}")
+        cancelled_count = 0
+        failed_count = 0
+
+        for order_id in list(game.order_ids):  # Use list() to avoid modifying during iteration
+            try:
+                logger.info(f"  Cancelling order: {order_id}")
+                self.trading_client.cancel_order(order_id)
+                logger.info(f"  ✓ Order cancelled: {order_id}")
+                cancelled_count += 1
+
+                # Update dashboard
+                if self.supabase.client:
+                    try:
+                        self.supabase.update_order_status(order_id, 'cancelled', 0)
+                    except Exception as db_error:
+                        logger.error(f"    ✗ Failed to update dashboard for cancelled order: {db_error}")
+
+            except Exception as e:
+                logger.error(f"  ✗ Failed to cancel order {order_id}: {e}")
+                failed_count += 1
+
+        # Clear the order IDs list
+        game.order_ids.clear()
+        logger.info(f"Order cancellation complete: {cancelled_count} cancelled, {failed_count} failed")
 
     def check_exit_signal(self, game: GameMonitor) -> bool:
         """Check if we should exit position."""
@@ -581,6 +673,11 @@ class LiveTrader:
         logger.info("=" * 80)
         logger.info(f"EXIT SIGNAL: {game.market_title}")
         logger.info("=" * 80)
+
+        # First, cancel any unfilled orders
+        if game.order_ids:
+            logger.info("Cancelling unfilled orders before exiting positions")
+            self.cancel_pending_orders(game)
 
         current_price = self.get_current_price(game.market_ticker)
         if current_price is None:
@@ -688,7 +785,21 @@ class LiveTrader:
                 games_to_remove = []
 
                 for market_ticker, game in list(self.active_games.items()):
+                    # Log game status periodically (every minute)
+                    if now % 60 == 0:
+                        pending_count = len(game.order_ids) if game.order_ids else 0
+                        position_count = len(game.positions) if game.positions else 0
+                        logger.info(f"[{game.market_ticker}] Status: triggered={game.triggered}, pending_orders={pending_count}, positions={position_count}")
+
                     if now > game.halftime_ts:
+                        logger.info(f"Halftime reached for {game.market_ticker} - cleaning up")
+                        # Cancel any unfilled orders
+                        if game.order_ids:
+                            self.cancel_pending_orders(game)
+                        # Exit any filled positions
+                        if game.positions:
+                            self.exit_position(game)
+                        # Now mark for removal
                         games_to_remove.append(market_ticker)
                         continue
 
@@ -718,6 +829,7 @@ class LiveTrader:
 
                     # Check if any pending orders have filled
                     if game.triggered and game.order_ids:
+                        logger.info(f"→ Monitoring orders for {game.market_ticker}")
                         self.check_order_fills(game)
 
                     if not game.triggered and self.check_entry_signal(game):

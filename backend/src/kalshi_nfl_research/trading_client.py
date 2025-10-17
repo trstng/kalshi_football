@@ -69,7 +69,7 @@ class KalshiTradingClient:
         """Get all open positions."""
         response = self.portfolio_api.get_positions()
         # Convert response to list of dicts for compatibility
-        if hasattr(response, 'positions'):
+        if hasattr(response, 'positions') and response.positions is not None:
             return [pos.to_dict() if hasattr(pos, 'to_dict') else pos for pos in response.positions]
         return []
 
@@ -136,20 +136,39 @@ class KalshiTradingClient:
         return True
 
     def get_order_status(self, order_id: str) -> dict:
-        """Get status of an order."""
-        response = self.portfolio_api.get_order(order_id=order_id)
-        # Convert response to dict for compatibility
-        if hasattr(response, 'order'):
-            order = response.order
-            return {
-                "order_id": order.order_id if hasattr(order, 'order_id') else order_id,
-                "status": order.status if hasattr(order, 'status') else "unknown",
-                "ticker": order.ticker if hasattr(order, 'ticker') else None,
-                "side": order.side if hasattr(order, 'side') else None,
-                "action": order.action if hasattr(order, 'action') else None,
-                "count": order.count if hasattr(order, 'count') else None,
-            }
-        return {}
+        """
+        Get status of an order.
+
+        Note: Kalshi returns 404 for executed orders (they're removed from active orders).
+        In that case, we return None to indicate the order is no longer queryable.
+        """
+        try:
+            response = self.portfolio_api.get_order(order_id=order_id)
+            # Convert response to dict for compatibility
+            if hasattr(response, 'order'):
+                order = response.order
+                return {
+                    "order": {
+                        "order_id": order.order_id if hasattr(order, 'order_id') else order_id,
+                        "status": order.status if hasattr(order, 'status') else "unknown",
+                        "ticker": order.ticker if hasattr(order, 'ticker') else None,
+                        "side": order.side if hasattr(order, 'side') else None,
+                        "action": order.action if hasattr(order, 'action') else None,
+                        "count": order.count if hasattr(order, 'count') else None,
+                        "filled_count": order.filled_count if hasattr(order, 'filled_count') else 0,
+                        "yes_price": order.yes_price if hasattr(order, 'yes_price') else None,
+                        "no_price": order.no_price if hasattr(order, 'no_price') else None,
+                    }
+                }
+            return {}
+        except Exception as e:
+            # 404 means order was executed/cancelled and removed from active orders
+            if "404" in str(e) or "not_found" in str(e).lower():
+                logger.debug(f"Order {order_id} not found (likely executed/cancelled)")
+                return None  # None indicates order is not queryable
+            # Other errors should be raised
+            logger.error(f"Error getting order status for {order_id}: {e}")
+            raise
 
     def close(self):
         """Close the client."""
