@@ -588,18 +588,33 @@ class LiveTrader:
 
                 logger.info(f"    Status: {status}, Filled: {filled_count}/{total_count} @ {price}¢")
 
+                # Handle "executed" status (Kalshi sometimes returns this instead of "filled")
+                # When status is "executed" but filled_count is 0, query Supabase for original order size
+                if status == 'executed' and filled_count == 0:
+                    logger.info(f"    Order status is 'executed' but filled_count=0 - querying Supabase for order size")
+                    if self.supabase.client:
+                        order_record = self.supabase.get_order(order_id)
+                        if order_record:
+                            filled_count = order_record['size']
+                            total_count = order_record['size']
+                            price = order_record['price']
+                            logger.info(f"    Retrieved from database: {filled_count} contracts @ {price}¢")
+                        else:
+                            logger.error(f"    Could not find order in database: {order_id}")
+                            continue
+
                 # Update order status in database
                 if self.supabase.client:
                     try:
-                        if status == 'filled':
+                        if status == 'filled' or status == 'executed':
                             self.supabase.update_order_status(order_id, 'filled', filled_count)
                         elif filled_count > 0 and filled_count < total_count:
                             self.supabase.update_order_status(order_id, 'partially_filled', filled_count)
                     except Exception as db_error:
                         logger.error(f"    ✗ Failed to update dashboard for order {order_id}: {db_error}")
 
-                # Create position for filled orders
-                if filled_count > 0:
+                # Create position for filled orders (handle both "filled" and "executed" status)
+                if filled_count > 0 or status == 'executed':
                     # Check if we already created a position for this order
                     existing_position = next(
                         (p for p in game.positions if p.order_id == order_id),
@@ -635,7 +650,8 @@ class LiveTrader:
                         self._place_exit_order(game, position)
 
                 # Track fully filled orders to remove from pending list
-                if status == 'filled':
+                # Handle both "filled" and "executed" status
+                if status == 'filled' or status == 'executed':
                     filled_orders.append(order_id)
 
             except Exception as e:

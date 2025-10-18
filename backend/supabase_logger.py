@@ -337,3 +337,24 @@ class SupabaseLogger:
         except Exception as e:
             logger.error(f"Error getting pending orders: {e}")
             return []
+
+    def get_order(self, order_id: str) -> Optional[dict]:
+        """
+        Get order details by order_id.
+
+        Args:
+            order_id: Kalshi order ID
+
+        Returns:
+            Order record dict or None
+        """
+        if not self.client:
+            return None
+
+        try:
+            result = self.client.table('orders').select('*').eq('order_id', order_id).execute()
+            return result.data[0] if result.data else None
+
+        except Exception as e:
+            logger.error(f"Error getting order {order_id}: {e}")
+            return None
