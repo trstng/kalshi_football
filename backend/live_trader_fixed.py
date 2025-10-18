@@ -99,7 +99,8 @@ class LiveTrader:
             self.config = yaml.safe_load(f)
 
         # Initialize clients
-        self.public_client = KalshiClient()
+        # Rate limit: 75ms = ~13.3 req/sec (safely under Basic tier 20 req/sec limit)
+        self.public_client = KalshiClient(rate_limit_sleep_ms=75)
 
         if not self.config['risk']['dry_run']:
             creds = self.config['api_credentials']
