@@ -82,6 +82,7 @@ class Position:
     size: int
     entry_time: int
     order_id: Optional[str] = None
+    exit_order_id: Optional[str] = None  # Sell order at 55¢
 
 
 class LiveTrader:
@@ -484,6 +485,9 @@ class LiveTrader:
                                 })
                             except Exception as db_error:
                                 logger.error(f"    ✗ Failed to log position to dashboard: {db_error}")
+
+                        # IMMEDIATELY place exit order at 55¢ (bracket strategy)
+                        self._place_exit_order(game, position)
                     else:
                         # Order is pending - add to monitoring list
                         game.order_ids.append(order.order_id)
@@ -512,6 +516,42 @@ class LiveTrader:
 
         logger.info(f"Orders placed. Total potential exposure: ${self.total_exposure:,.2f}")
         logger.info("")
+
+    def _place_exit_order(self, game: GameMonitor, position: Position):
+        """
+        Place exit order at 55¢ for a filled position (bracket strategy).
+        """
+        revert_bands = self.config['trading']['revert_bands']
+        if not revert_bands:
+            logger.warning("No revert bands configured, skipping exit order")
+            return
+
+        exit_price_cents = int(revert_bands[0] * 100)  # First band (typically 55¢)
+
+        logger.info(f"  → Placing exit order: {position.size} contracts @ {exit_price_cents}¢")
+
+        if self.config['risk']['dry_run']:
+            logger.info("    [DRY RUN] Would place exit order here")
+            position.exit_order_id = f"dry_run_exit_{position.order_id}"
+            return
+
+        if not self.trading_client:
+            return
+
+        try:
+            exit_order = self.trading_client.place_order(
+                market_ticker=game.market_ticker,
+                side=position.side,  # Sell the same side we bought
+                action="sell",
+                count=position.size,
+                price=exit_price_cents,
+                order_type="limit"
+            )
+            position.exit_order_id = exit_order.order_id
+            logger.info(f"    ✓ Exit order placed: {exit_order.order_id}")
+
+        except Exception as e:
+            logger.error(f"    ✗ Error placing exit order: {e}")
 
     def check_order_fills(self, game: GameMonitor):
         """Check if any pending orders have filled and convert them to positions."""
@@ -591,6 +631,9 @@ class LiveTrader:
                             except Exception as db_error:
                                 logger.error(f"    ✗ Failed to log position to dashboard: {db_error}")
 
+                        # IMMEDIATELY place exit order at 55¢ (bracket strategy)
+                        self._place_exit_order(game, position)
+
                 # Track fully filled orders to remove from pending list
                 if status == 'filled':
                     filled_orders.append(order_id)
@@ -605,6 +648,99 @@ class LiveTrader:
             if order_id in game.order_ids:
                 game.order_ids.remove(order_id)
                 logger.info(f"  Removed fully filled order from pending list: {order_id}")
+
+    def check_exit_order_fills(self, game: GameMonitor) -> bool:
+        """
+        Check if ANY exit orders have filled (bracket strategy).
+        If any exit fills, it means price reverted → exit ALL positions immediately.
+
+        Returns True if we should exit all positions.
+        """
+        if not game.positions:
+            return False
+
+        if self.config['risk']['dry_run']:
+            # In dry run, check if current price >= exit target
+            current_price = self.get_current_price(game.market_ticker)
+            if current_price is None:
+                return False
+
+            revert_bands = self.config['trading']['revert_bands']
+            if revert_bands and current_price >= revert_bands[0]:
+                logger.info(f"  🎯 [DRY RUN] Exit order would have filled @ {int(revert_bands[0] * 100)}¢")
+                return True
+            return False
+
+        if not self.trading_client:
+            return False
+
+        # Check each position's exit order
+        for position in game.positions:
+            if not position.exit_order_id:
+                continue
+
+            try:
+                status_response = self.trading_client.get_order_status(position.exit_order_id)
+
+                # 404 means order executed/cancelled - assume filled
+                if status_response is None:
+                    logger.info(f"  🎯 EXIT ORDER FILLED! (Order: {position.exit_order_id})")
+                    logger.info(f"     Price reverted → Exiting ALL positions")
+                    return True
+
+                if not status_response or 'order' not in status_response:
+                    continue
+
+                order_status = status_response.get('order', {})
+                status = order_status.get('status', 'pending')
+                filled_count = order_status.get('filled_count', 0)
+
+                # If any exit order filled, trigger full exit
+                if status == 'filled' or status == 'executed' or filled_count > 0:
+                    logger.info(f"  🎯 EXIT ORDER FILLED! (Order: {position.exit_order_id})")
+                    logger.info(f"     Price reverted → Exiting ALL positions")
+                    return True
+
+            except Exception as e:
+                logger.error(f"  ✗ Error checking exit order {position.exit_order_id}: {e}")
+
+        return False
+
+    def _cancel_exit_orders(self, game: GameMonitor):
+        """Cancel all pending exit orders (55¢ sells) for this game."""
+        exit_orders = [p.exit_order_id for p in game.positions if p.exit_order_id]
+
+        if not exit_orders:
+            return
+
+        if self.config['risk']['dry_run']:
+            logger.info(f"[DRY RUN] Would cancel {len(exit_orders)} pending exit order(s)")
+            for position in game.positions:
+                position.exit_order_id = None
+            return
+
+        if not self.trading_client:
+            return
+
+        logger.info(f"Cancelling {len(exit_orders)} pending exit order(s)")
+        cancelled_count = 0
+        failed_count = 0
+
+        for position in game.positions:
+            if not position.exit_order_id:
+                continue
+
+            try:
+                logger.info(f"  Cancelling exit order: {position.exit_order_id}")
+                self.trading_client.cancel_order(position.exit_order_id)
+                logger.info(f"  ✓ Exit order cancelled: {position.exit_order_id}")
+                cancelled_count += 1
+                position.exit_order_id = None
+            except Exception as e:
+                logger.error(f"  ✗ Failed to cancel exit order {position.exit_order_id}: {e}")
+                failed_count += 1
+
+        logger.info(f"Exit order cancellation complete: {cancelled_count} cancelled, {failed_count} failed")
 
     def cancel_pending_orders(self, game: GameMonitor):
         """Cancel all unfilled orders for this game."""
@@ -674,10 +810,14 @@ class LiveTrader:
         logger.info(f"EXIT SIGNAL: {game.market_title}")
         logger.info("=" * 80)
 
-        # First, cancel any unfilled orders
+        # First, cancel any unfilled BUY orders
         if game.order_ids:
-            logger.info("Cancelling unfilled orders before exiting positions")
+            logger.info("Cancelling unfilled buy orders before exiting positions")
             self.cancel_pending_orders(game)
+
+        # Cancel any pending EXIT orders (55¢ sells)
+        if game.positions:
+            self._cancel_exit_orders(game)
 
         current_price = self.get_current_price(game.market_ticker)
         if current_price is None:
@@ -831,6 +971,14 @@ class LiveTrader:
                     if game.triggered and game.order_ids:
                         logger.info(f"→ Monitoring orders for {game.market_ticker}")
                         self.check_order_fills(game)
+
+                    # Check if any exit orders (55¢ sells) have filled
+                    # If ANY exit fills, price reverted → exit ALL positions immediately
+                    if game.positions and self.check_exit_order_fills(game):
+                        logger.info("🎯 Exit order filled → Triggering full exit")
+                        self.exit_position(game)
+                        games_to_remove.append(market_ticker)
+                        continue
 
                     if not game.triggered and self.check_entry_signal(game):
                         active_positions = sum(1 for g in self.active_games.values() if g.positions)
