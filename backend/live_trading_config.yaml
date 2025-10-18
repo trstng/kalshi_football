@@ -24,7 +24,10 @@ trading:
   pregame_favorite_threshold: 0.60  # Only trade games with >60% pregame favorite
   trigger_threshold: 0.50  # Enter when price drops below 50%
 
-  # Revert bands (exit targets)
+  # Exit strategy: Measured move
+  revert_fraction: 0.50  # Expect 50% revert of total drop (pregame → entry)
+
+  # Legacy revert bands (kept for reference, not used with measured move)
   revert_bands: [0.55, 0.60, 0.65, 0.70]
 
   # Scaling levels (price in cents, Kelly multiplier)

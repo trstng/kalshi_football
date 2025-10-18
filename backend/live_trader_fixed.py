@@ -69,8 +69,12 @@ class GameMonitor:
 
     # Order tracking
     triggered: bool = False  # Have we placed orders yet?
-    order_ids: list = field(default_factory=list)  # Pending order IDs
+    order_ids: list = field(default_factory=list)  # Pending buy order IDs
     positions: list = field(default_factory=list)  # Filled positions only
+
+    # Exit tracking
+    exiting: bool = False  # Are we in exit process?
+    exit_order_ids: list = field(default_factory=list)  # Sell order IDs during exit
 
 
 @dataclass
@@ -520,16 +524,23 @@ class LiveTrader:
 
     def _place_exit_order(self, game: GameMonitor, position: Position):
         """
-        Place exit order at 55¢ for a filled position (bracket strategy).
+        Place exit order using measured move strategy.
+        Exit price = entry + (pregame - entry) * revert_fraction
         """
-        revert_bands = self.config['trading']['revert_bands']
-        if not revert_bands:
-            logger.warning("No revert bands configured, skipping exit order")
+        if not game.pregame_prob:
+            logger.warning("No pregame probability available, cannot calculate exit price")
             return
 
-        exit_price_cents = int(revert_bands[0] * 100)  # First band (typically 55¢)
+        revert_fraction = self.config['trading'].get('revert_fraction', 0.50)
+
+        # Measured move formula: expect partial revert of the total drop
+        pregame_cents = int(game.pregame_prob * 100)
+        drop_cents = pregame_cents - position.entry_price
+        expected_revert_cents = int(drop_cents * revert_fraction)
+        exit_price_cents = position.entry_price + expected_revert_cents
 
         logger.info(f"  → Placing exit order: {position.size} contracts @ {exit_price_cents}¢")
+        logger.info(f"     Measured move: {position.entry_price}¢ entry + {expected_revert_cents}¢ revert ({revert_fraction:.0%} of {drop_cents}¢ drop)")
 
         if self.config['risk']['dry_run']:
             logger.info("    [DRY RUN] Would place exit order here")
@@ -821,10 +832,18 @@ class LiveTrader:
 
         return False
 
-    def exit_position(self, game: GameMonitor):
-        """Exit all positions for this game."""
+    def exit_position(self, game: GameMonitor, use_market_orders: bool = False):
+        """
+        Initiate exit process by placing sell orders.
+        Does NOT calculate P&L yet - that happens when orders actually fill.
+
+        Args:
+            use_market_orders: If True, use market orders (halftime exit).
+                              If False, use limit orders at current price (revert exit).
+        """
         logger.info("=" * 80)
         logger.info(f"EXIT SIGNAL: {game.market_title}")
+        logger.info(f"Order type: {'MARKET' if use_market_orders else 'LIMIT'}")
         logger.info("=" * 80)
 
         # First, cancel any unfilled BUY orders
@@ -832,75 +851,195 @@ class LiveTrader:
             logger.info("Cancelling unfilled buy orders before exiting positions")
             self.cancel_pending_orders(game)
 
-        # Cancel any pending EXIT orders (55¢ sells)
+        # Cancel any pending bracket EXIT orders (55¢ sells)
         if game.positions:
             self._cancel_exit_orders(game)
 
-        current_price = self.get_current_price(game.market_ticker)
-        if current_price is None:
-            logger.error("Could not get current price for exit")
-            return
+        # Get current price for limit orders
+        current_price = None
+        if not use_market_orders:
+            current_price = self.get_current_price(game.market_ticker)
+            if current_price is None:
+                logger.error("Could not get current price, switching to market orders")
+                use_market_orders = True
 
-        current_price_cents = int(current_price * 100)
+        current_price_cents = int(current_price * 100) if current_price else None
 
-        total_pnl = 0.0
-        total_contracts = 0
-
+        # Place sell orders for all positions
         for position in game.positions:
-            pnl_per_contract = (current_price_cents - position.entry_price) / 100.0
-            pnl_total = pnl_per_contract * position.size
-
-            logger.info(
-                f"  Position: {position.size} @ {position.entry_price}¢ → {current_price_cents}¢ "
-                f"= ${pnl_total:+,.2f}"
-            )
-
-            total_pnl += pnl_total
-            total_contracts += position.size
-
-            if not self.config['risk']['dry_run']:
+            if self.config['risk']['dry_run']:
+                logger.info(f"  [DRY RUN] Would place {'market' if use_market_orders else 'limit'} sell: {position.size} @ {position.entry_price}¢")
+                order_id = f"dry_run_exit_{position.order_id}"
+                game.exit_order_ids.append(order_id)
+            else:
                 try:
-                    order = self.trading_client.place_order(
-                        market_ticker=game.market_ticker,
-                        side=position.side,  # Sell the same side we bought
-                        action="sell",
-                        count=position.size,
-                        price=current_price_cents,
-                        order_type="limit"
-                    )
-                    logger.info(f"  ✓ Sell order placed: {order.order_id}")
+                    if use_market_orders:
+                        # Market order - no price specified
+                        logger.info(f"  Placing MARKET sell: {position.size} contracts")
+                        order = self.trading_client.place_order(
+                            market_ticker=game.market_ticker,
+                            side=position.side,
+                            action="sell",
+                            count=position.size,
+                            price=1,  # Market orders still need a price, use 1¢
+                            order_type="market"
+                        )
+                    else:
+                        # Limit order at current price
+                        logger.info(f"  Placing LIMIT sell: {position.size} @ {current_price_cents}¢")
+                        order = self.trading_client.place_order(
+                            market_ticker=game.market_ticker,
+                            side=position.side,
+                            action="sell",
+                            count=position.size,
+                            price=current_price_cents,
+                            order_type="limit"
+                        )
+
+                    game.exit_order_ids.append(order.order_id)
+                    logger.info(f"  ✓ Exit order placed: {order.order_id}")
+
                 except Exception as e:
-                    logger.error(f"  ✗ Error placing sell order: {e}")
+                    logger.error(f"  ✗ Error placing exit order: {e}")
 
-        old_bankroll = self.bankroll
-        self.bankroll += total_pnl
-
-        logger.info("")
-        logger.info(f"Total P&L: ${total_pnl:+,.2f}")
-        logger.info(f"Bankroll: ${old_bankroll:,.2f} → ${self.bankroll:,.2f}")
+        # Set exiting flag - P&L will be calculated when orders fill
+        game.exiting = True
+        logger.info(f"Exit orders placed. Waiting for fills to calculate P&L...")
         logger.info("")
 
-        # Log position exit to dashboard
-        if self.supabase.client:
-            self.supabase.log_position_exit(
-                market_ticker=game.market_ticker,
-                exit_price=current_price_cents,
-                exit_time=int(time.time()),
-                pnl=total_pnl
-            )
+    def monitor_exit_orders(self, game: GameMonitor) -> bool:
+        """
+        Monitor exit sell orders and calculate P&L when they fill.
 
-            # Log bankroll change
-            self.supabase.log_bankroll_change(
-                timestamp=int(time.time()),
-                new_amount=self.bankroll,
-                change=total_pnl,
-                description=f"Exited {game.market_title}"
-            )
+        Returns:
+            True if all exit orders have filled (game can be removed), False otherwise
+        """
+        if not game.exit_order_ids:
+            return False
 
-            # Update game status to completed
-            self.supabase.update_game_status(game.market_ticker, 'completed')
+        if self.config['risk']['dry_run']:
+            # In dry run, immediately mark as filled
+            logger.info(f"[DRY RUN] Exit orders filled")
+            game.positions.clear()
+            game.exit_order_ids.clear()
+            game.exiting = False
+            return True
 
-        game.positions.clear()
+        if not self.trading_client:
+            return False
+
+        logger.info(f"Monitoring {len(game.exit_order_ids)} exit order(s) for {game.market_ticker}")
+
+        all_filled = True
+        filled_orders = []
+        total_pnl = 0.0
+
+        for order_id in game.exit_order_ids:
+            try:
+                status_response = self.trading_client.get_order_status(order_id)
+
+                # 404 means order executed/cancelled
+                if status_response is None:
+                    logger.info(f"  ✓ Exit order {order_id} filled (removed from active orders)")
+                    filled_orders.append(order_id)
+                    continue
+
+                if not status_response or 'order' not in status_response:
+                    logger.warning(f"  ⚠️  Invalid response for exit order {order_id}")
+                    all_filled = False
+                    continue
+
+                order_status = status_response.get('order', {})
+                status = order_status.get('status', 'pending')
+                filled_count = order_status.get('filled_count', 0)
+                total_count = order_status.get('count', 0)
+
+                # Get actual fill price
+                yes_price = order_status.get('yes_price')
+                no_price = order_status.get('no_price')
+                fill_price = yes_price if yes_price is not None else no_price
+
+                logger.info(f"  Exit order {order_id}: {status}, Filled: {filled_count}/{total_count}")
+
+                # Check if filled
+                if status == 'filled' or status == 'executed':
+                    # Find corresponding position to calculate P&L
+                    for position in game.positions:
+                        # Match position to exit order by size (approximate)
+                        if position.size == total_count:
+                            if fill_price:
+                                pnl = ((fill_price - position.entry_price) / 100.0) * position.size
+                                total_pnl += pnl
+                                logger.info(f"    Position {position.size} @ {position.entry_price}¢ → {fill_price}¢ = ${pnl:+.2f}")
+                            break
+
+                    filled_orders.append(order_id)
+
+                    # Update order status in database
+                    if self.supabase.client:
+                        try:
+                            self.supabase.update_order_status(order_id, 'filled', filled_count)
+                        except Exception as db_error:
+                            logger.error(f"    ✗ Failed to update order status: {db_error}")
+                else:
+                    # Order still pending
+                    all_filled = False
+
+            except Exception as e:
+                logger.error(f"  ✗ Error checking exit order {order_id}: {e}")
+                all_filled = False
+
+        # Remove filled orders from tracking list
+        for order_id in filled_orders:
+            if order_id in game.exit_order_ids:
+                game.exit_order_ids.remove(order_id)
+
+        # If all orders filled, finalize the exit
+        if all_filled and not game.exit_order_ids:
+            logger.info("=" * 80)
+            logger.info(f"ALL EXIT ORDERS FILLED: {game.market_title}")
+            logger.info("=" * 80)
+
+            old_bankroll = self.bankroll
+            self.bankroll += total_pnl
+
+            logger.info(f"Total P&L: ${total_pnl:+,.2f}")
+            logger.info(f"Bankroll: ${old_bankroll:,.2f} → ${self.bankroll:,.2f}")
+            logger.info("")
+
+            # Log to dashboard
+            if self.supabase.client:
+                # Get average exit price
+                avg_exit_price = None
+                if game.positions:
+                    # We don't have exact exit prices per position, use current market price as approximation
+                    current_price = self.get_current_price(game.market_ticker)
+                    avg_exit_price = int(current_price * 100) if current_price else 50
+
+                self.supabase.log_position_exit(
+                    market_ticker=game.market_ticker,
+                    exit_price=avg_exit_price,
+                    exit_time=int(time.time()),
+                    pnl=total_pnl
+                )
+
+                # Log bankroll change
+                self.supabase.log_bankroll_change(
+                    timestamp=int(time.time()),
+                    new_amount=self.bankroll,
+                    change=total_pnl,
+                    description=f"Exited {game.market_title}"
+                )
+
+                # Update game status to completed
+                self.supabase.update_game_status(game.market_ticker, 'completed')
+
+            # Clear positions and reset flags
+            game.positions.clear()
+            game.exiting = False
+            return True  # Game can be removed
+
+        return False  # Still waiting for exits to fill
 
     def run(self):
         """Main trading loop."""
@@ -953,11 +1092,10 @@ class LiveTrader:
                         # Cancel any unfilled orders
                         if game.order_ids:
                             self.cancel_pending_orders(game)
-                        # Exit any filled positions
-                        if game.positions:
-                            self.exit_position(game)
-                        # Now mark for removal
-                        games_to_remove.append(market_ticker)
+                        # Exit any filled positions with MARKET ORDERS (timeout exit)
+                        if game.positions and not game.exiting:
+                            self.exit_position(game, use_market_orders=True)
+                        # Don't remove yet - wait for exit orders to fill
                         continue
 
                     # Check and capture checkpoints (6h, 3h, 30m before kickoff)
@@ -989,13 +1127,19 @@ class LiveTrader:
                         logger.info(f"→ Monitoring orders for {game.market_ticker}")
                         self.check_order_fills(game)
 
-                    # Check if any exit orders (55¢ sells) have filled
-                    # If ANY exit fills, price reverted → exit ALL positions immediately
-                    if game.positions and self.check_exit_order_fills(game):
-                        logger.info("🎯 Exit order filled → Triggering full exit")
-                        self.exit_position(game)
-                        games_to_remove.append(market_ticker)
-                        continue
+                    # Check if any bracket exit orders (55¢ sells) have filled
+                    # If ANY exit fills, price reverted → exit ALL positions with limit orders
+                    if game.positions and not game.exiting and self.check_exit_order_fills(game):
+                        logger.info("🎯 Bracket exit filled → Exiting all positions with LIMIT orders")
+                        self.exit_position(game, use_market_orders=False)
+                        # Don't remove yet - wait for exit orders to fill
+
+                    # Monitor exit orders if we're in exit process
+                    if game.exiting:
+                        if self.monitor_exit_orders(game):
+                            # All exit orders filled, can remove game
+                            games_to_remove.append(market_ticker)
+                        continue  # Skip other checks while exiting
 
                     if not game.triggered and self.check_entry_signal(game):
                         active_positions = sum(1 for g in self.active_games.values() if g.positions)
@@ -1006,9 +1150,12 @@ class LiveTrader:
                         else:
                             logger.warning(f"Max concurrent games ({max_concurrent}) reached, skipping entry")
 
-                    if game.positions and self.check_exit_signal(game):
-                        self.exit_position(game)
-                        games_to_remove.append(market_ticker)
+                    # Check for other exit signals (non-bracket exits)
+                    if game.positions and not game.exiting and self.check_exit_signal(game):
+                        # Use limit orders for normal exits (not halftime timeout)
+                        now_time = int(datetime.utcnow().timestamp())
+                        use_market = (now_time >= game.halftime_ts)
+                        self.exit_position(game, use_market_orders=use_market)
 
                 for market_ticker in games_to_remove:
                     del self.active_games[market_ticker]
