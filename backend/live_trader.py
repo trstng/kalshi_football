@@ -438,7 +438,7 @@ class LiveTrader:
         logger.info("")
 
     def check_exit_signal(self, game: GameMonitor) -> bool:
-        """Check if we should exit position (via sell order fills or halftime)."""
+        """Check if we should exit position (only at halftime or when ALL positions sold)."""
         if not game.positions:
             return False
 
@@ -449,7 +449,8 @@ class LiveTrader:
             logger.info(f"Halftime timeout reached for {game.market_title}")
             return True
 
-        # Check if any sell orders have been filled
+        # Update sell_filled status for all positions (but don't trigger exit yet)
+        # Individual limit orders will exit automatically - we only exit at halftime
         for position in game.positions:
             if not position.sell_order_id:
                 continue
@@ -468,17 +469,18 @@ class LiveTrader:
                 if revert_bands and current_price >= revert_bands[0]:
                     position.sell_filled = True
                     logger.info(f"✓ [DRY RUN] Sell order would have filled @ {int(revert_bands[0] * 100)}¢")
-                    return True
+                    # Don't return True here - let limit orders handle exits automatically
             else:
                 try:
                     status = self.trading_client.get_order_status(position.sell_order_id)
                     if status.get('status') == 'filled':
                         position.sell_filled = True
                         logger.info(f"✓ Sell order filled: {position.size} contracts")
-                        return True
+                        # Don't return True here - let limit orders handle exits automatically
                 except Exception as e:
                     logger.error(f"Error checking sell order status for {position.sell_order_id}: {e}")
 
+        # Only trigger exit_position() at halftime, not when individual limits fill
         return False
 
     def exit_position(self, game: GameMonitor):
@@ -538,7 +540,8 @@ class LiveTrader:
             total_contracts += position.size
 
             # If not already filled and not dry run, place market sell order
-            if not position.sell_filled and not self.config['risk']['dry_run']:
+            # IMPORTANT: Only place sell order if there's no pending sell order already!
+            if not position.sell_filled and not position.sell_order_id and not self.config['risk']['dry_run']:
                 try:
                     order = self.trading_client.place_order(
                         market_ticker=game.market_ticker,
