@@ -67,6 +67,16 @@ export function Nav() {
             >
               Analytics
             </Link>
+            <Link
+              to="/charts"
+              className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all duration-200 ${
+                isActive('/charts')
+                  ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg shadow-purple-500/50'
+                  : 'text-gray-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              Charts
+            </Link>
           </div>
         </div>
       </div>

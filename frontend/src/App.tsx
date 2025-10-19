@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import Schedule from './pages/Schedule'
 import TradeHistory from './pages/TradeHistory'
 import Analytics from './pages/Analytics'
+import Charts from './pages/Charts'
 
 function App() {
   return (
@@ -15,6 +16,7 @@ function App() {
           <Route path="/schedule" element={<Schedule />} />
           <Route path="/history" element={<TradeHistory />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/charts" element={<Charts />} />
         </Routes>
       </div>
     </Router>
