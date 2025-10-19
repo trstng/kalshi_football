@@ -15,7 +15,7 @@ trading:
   bankroll: 500
 
   # Maximum exposure per game (50% = half your bankroll)
-  max_exposure_pct: 0.20
+  max_exposure_pct: 0.50
 
   # Kelly fraction (0.15 = 1/4 Kelly, conservative)
   kelly_fraction: 0.15
