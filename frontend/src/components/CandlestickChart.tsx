@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import ReactApexChart from 'react-apexcharts'
 import type { ApexOptions } from 'apexcharts'
 import { format } from 'date-fns'
@@ -151,7 +150,7 @@ export default function CandlestickChart({ candles, markers }: CandlestickChartP
     },
     tooltip: {
       theme: 'dark',
-      custom: function({ seriesIndex, dataPointIndex, w }: any) {
+      custom: function({ dataPointIndex }: any) {
         const candle = candles[dataPointIndex]
         if (!candle) return ''
 
