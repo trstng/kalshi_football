@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { supabase, type Game, type Position, type Order } from '../lib/supabase'
+import { supabase, type Game, type Position } from '../lib/supabase'
 import { format } from 'date-fns'
 import GameDetailModal from '../components/GameDetailModal'
 

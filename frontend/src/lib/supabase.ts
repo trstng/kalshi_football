@@ -56,6 +56,7 @@ export type Position = {
   status: 'open' | 'closed'
   created_at: string
   updated_at: string
+  game?: Game  // Optional joined game data
 }
 
 export type PriceSnapshot = {
