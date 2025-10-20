@@ -5,25 +5,18 @@ import GameDetailModal from '../components/GameDetailModal'
 
 export default function Dashboard() {
   const [activeGames, setActiveGames] = useState<Game[]>([])
-  const [openOrders, setOpenOrders] = useState<Order[]>([])
   const [openPositions, setOpenPositions] = useState<Position[]>([])
   const [currentBankroll, setCurrentBankroll] = useState(500)
   const [selectedGame, setSelectedGame] = useState<Game | null>(null)
 
   useEffect(() => {
     fetchActiveGames()
-    fetchOpenOrders()
     fetchOpenPositions()
     fetchBankroll()
 
     const gamesSubscription = supabase
       .channel('games_changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'games' }, fetchActiveGames)
-      .subscribe()
-
-    const ordersSubscription = supabase
-      .channel('orders_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchOpenOrders)
       .subscribe()
 
     const positionsSubscription = supabase
@@ -38,7 +31,6 @@ export default function Dashboard() {
 
     return () => {
       gamesSubscription.unsubscribe()
-      ordersSubscription.unsubscribe()
       positionsSubscription.unsubscribe()
       bankrollSubscription.unsubscribe()
     }
@@ -60,19 +52,17 @@ export default function Dashboard() {
     }
   }
 
-  async function fetchOpenOrders() {
-    const { data } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false })
-    if (data) setOpenOrders(data)
-  }
-
   async function fetchOpenPositions() {
     const { data } = await supabase
       .from('positions')
-      .select('*')
+      .select(`
+        *,
+        game:games!positions_market_ticker_fkey (
+          market_title,
+          market_ticker,
+          yes_subtitle
+        )
+      `)
       .eq('status', 'open')
       .order('entry_time', { ascending: false })
     if (data) setOpenPositions(data)
@@ -138,21 +128,21 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Open Orders Card */}
+          {/* Open Positions Card */}
           <div className="relative group">
             <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl blur opacity-30 group-hover:opacity-100 transition duration-300"></div>
             <div className="relative bg-slate-800/90 backdrop-blur-xl rounded-2xl p-6 border border-purple-500/20">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-gray-400 text-sm font-semibold uppercase tracking-wider">Open Orders</span>
+                <span className="text-gray-400 text-sm font-semibold uppercase tracking-wider">Open Positions</span>
                 <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
               <div className="text-4xl font-black text-white">
-                {openOrders.length}
+                {openPositions.length}
               </div>
               <div className="text-purple-400 text-sm font-semibold">
-                {openPositions.length} Filled
+                Active Trades
               </div>
             </div>
           </div>
@@ -304,106 +294,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Open Orders Table */}
-        <div className="mb-8 relative group">
-          <div className="absolute -inset-0.5 bg-gradient-to-r from-orange-600/50 to-amber-600/50 rounded-2xl blur opacity-20"></div>
-          <div className="relative bg-slate-800/90 backdrop-blur-xl rounded-2xl border border-slate-700/50 overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-700/50 bg-slate-900/50">
-              <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-                <div className="w-1 h-6 bg-gradient-to-b from-orange-500 to-amber-500 rounded-full"></div>
-                Open Orders (Limit Order Ladder)
-              </h2>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-slate-700/50">
-                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
-                      Market
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
-                      Limit Price
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
-                      Size
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
-                      Filled
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
-                      Time Placed
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {openOrders.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center">
-                        <div className="flex flex-col items-center gap-3">
-                          <svg className="w-16 h-16 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                          </svg>
-                          <p className="text-gray-400 text-lg">No pending orders</p>
-                          <p className="text-gray-500 text-sm">Orders will appear here once game becomes eligible</p>
-                        </div>
-                      </td>
-                    </tr>
-                  ) : (
-                    openOrders.map((order) => (
-                      <tr key={order.id} className="border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="font-bold text-white text-sm">{order.market_ticker}</div>
-                          <div className="text-gray-500 text-xs font-mono">{order.order_id.slice(0, 8)}...</div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="inline-flex items-center gap-2 bg-orange-500/20 px-3 py-1 rounded-full border border-orange-500/50">
-                            <span className="text-orange-300 font-bold">{order.price}¢</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-gray-300 font-bold">
-                          {order.size} contracts
-                        </td>
-                        <td className="px-6 py-4">
-                          {order.filled_size > 0 ? (
-                            <div className="flex items-center gap-2">
-                              <div className="flex-1 bg-slate-700 rounded-full h-2 overflow-hidden">
-                                <div
-                                  className="bg-gradient-to-r from-green-500 to-emerald-500 h-full transition-all"
-                                  style={{ width: `${(order.filled_size / order.size) * 100}%` }}
-                                ></div>
-                              </div>
-                              <span className="text-green-400 font-bold text-sm">
-                                {order.filled_size}/{order.size}
-                              </span>
-                            </div>
-                          ) : (
-                            <span className="text-gray-500 text-sm">0/{order.size}</span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
-                            order.status === 'pending'
-                              ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50'
-                              : 'bg-green-500/20 text-green-400 border border-green-500/50'
-                          }`}>
-                            {order.status === 'pending' ? '⏳ Pending' : order.status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-gray-400 font-medium text-sm">
-                          {format(new Date(order.created_at), 'MMM d, h:mm a')}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
         {/* Open Positions Table */}
         <div className="relative group">
           <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-600/50 to-pink-600/50 rounded-2xl blur opacity-20"></div>
@@ -448,8 +338,9 @@ export default function Dashboard() {
                   ) : (
                     openPositions.map((position) => (
                       <tr key={position.id} className="border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors">
-                        <td className="px-6 py-4 font-bold text-white text-lg">
-                          {position.market_ticker}
+                        <td className="px-6 py-4">
+                          <div className="font-bold text-white text-lg">{position.game?.market_title || position.market_ticker}</div>
+                          <div className="text-gray-500 text-sm">{position.game?.yes_subtitle || 'N/A'}</div>
                         </td>
                         <td className="px-6 py-4">
                           <div className="inline-flex items-center gap-2 bg-emerald-500/20 px-3 py-1 rounded-full border border-emerald-500/50">

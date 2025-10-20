@@ -27,6 +27,9 @@ trading:
   # Exit strategy: Measured move
   revert_fraction: 0.50  # Expect 50% revert of total drop (pregame → entry)
 
+  # Volume threshold: minimum 30-day volume to trade (in USD)
+  volume_threshold_usd: 50000  # $50k minimum volume
+
   # Legacy revert bands (kept for reference, not used with measured move)
   revert_bands: [0.55, 0.60, 0.65, 0.70]
 

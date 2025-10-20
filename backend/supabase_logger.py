@@ -3,10 +3,34 @@ Supabase Logger - Writes trading bot data to Supabase for dashboard visualizatio
 """
 import os
 import logging
+import time
 from typing import Optional
+from functools import wraps
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
+
+
+def retry_on_failure(max_retries=3, delay=1):
+    """Retry database operations with exponential backoff."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        wait_time = delay * (2 ** attempt)
+                        logger.warning(f"Database update failed (attempt {attempt + 1}/{max_retries}), "
+                                      f"retrying in {wait_time}s: {e}")
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"Database update failed after {max_retries} attempts: {e}")
+                        raise
+            return None
+        return wrapper
+    return decorator
 
 
 class SupabaseLogger:
@@ -129,6 +153,7 @@ class SupabaseLogger:
         except Exception as e:
             logger.error(f"Error updating eligibility: {e}")
 
+    @retry_on_failure(max_retries=3, delay=1)
     def log_position_entry(self, position_data: dict) -> Optional[str]:
         """
         Log a new position entry.
@@ -143,49 +168,70 @@ class SupabaseLogger:
         if not self.client:
             return None
 
-        try:
-            # Get game_id from market_ticker
-            game = self.client.table('games').select('id').eq('market_ticker', position_data['market_ticker']).execute()
+        # Get game_id from market_ticker
+        game = self.client.table('games').select('id').eq('market_ticker', position_data['market_ticker']).execute()
 
-            if not game.data:
-                logger.warning(f"Game not found for position: {position_data['market_ticker']}")
-                return None
+        if not game.data:
+            logger.warning(f"Game not found for position: {position_data['market_ticker']}")
+            return None
 
-            position_data['game_id'] = game.data[0]['id']
-            position_data['status'] = 'open'
+        position_data['game_id'] = game.data[0]['id']
+        position_data['status'] = 'open'
 
-            result = self.client.table('positions').insert(position_data).execute()
+        result = self.client.table('positions').insert(position_data).execute()
 
-            if result.data:
-                position_id = result.data[0]['id']
-                logger.debug(f"Logged position entry: {position_data['size']} @ {position_data['entry_price']}¢")
-                return position_id
-
-        except Exception as e:
-            logger.error(f"Error logging position entry: {e}")
+        if result.data:
+            position_id = result.data[0]['id']
+            logger.debug(f"Logged position entry: {position_data['size']} @ {position_data['entry_price']}¢")
+            return position_id
 
         return None
 
+    @retry_on_failure(max_retries=3, delay=1)
     def log_position_exit(self, market_ticker: str, exit_price: int, exit_time: int, pnl: float):
         """Update position with exit details and calculate P&L."""
         if not self.client:
             return
 
-        try:
-            # Update all open positions for this market
-            update_data = {
-                'exit_price': exit_price,
-                'exit_time': exit_time,
-                'pnl': pnl,
-                'status': 'closed',
-                'updated_at': 'now()'
-            }
+        # Update all open positions for this market
+        update_data = {
+            'exit_price': exit_price,
+            'exit_time': exit_time,
+            'pnl': pnl,
+            'status': 'closed',
+            'updated_at': 'now()'
+        }
 
-            self.client.table('positions').update(update_data).eq('market_ticker', market_ticker).eq('status', 'open').execute()
-            logger.debug(f"Logged position exit: {market_ticker} P&L=${pnl:+.2f}")
+        self.client.table('positions').update(update_data).eq('market_ticker', market_ticker).eq('status', 'open').execute()
+        logger.debug(f"Logged position exit: {market_ticker} P&L=${pnl:+.2f}")
 
-        except Exception as e:
-            logger.error(f"Error logging position exit: {e}")
+    @retry_on_failure(max_retries=3, delay=1)
+    def update_position_status(self, order_id: str, status: str, exit_price: Optional[int] = None, pnl: Optional[float] = None):
+        """
+        Update position status in database.
+
+        Args:
+            order_id: The original buy order ID
+            status: New status ('open' or 'closed')
+            exit_price: Exit price in cents (if closing)
+            pnl: Realized P&L (if closing)
+        """
+        if not self.client:
+            return
+
+        update_data = {
+            'status': status,
+            'updated_at': 'now()'
+        }
+
+        if status == 'closed':
+            update_data['exit_price'] = exit_price
+            update_data['pnl'] = pnl
+            update_data['exit_time'] = int(time.time())
+
+        self.client.table('positions').update(update_data).eq('order_id', order_id).execute()
+
+        logger.info(f"✓ Updated position status: {order_id} → {status}")
 
     def log_bankroll_change(self, timestamp: int, new_amount: float, change: float,
                            game_id: Optional[str] = None, description: Optional[str] = None):
@@ -292,6 +338,7 @@ class SupabaseLogger:
 
         return None
 
+    @retry_on_failure(max_retries=3, delay=1)
     def update_order_status(self, order_id: str, status: str, filled_size: int = 0):
         """
         Update order status (e.g., when order fills or gets cancelled).
@@ -304,18 +351,14 @@ class SupabaseLogger:
         if not self.client:
             return
 
-        try:
-            update_data = {
-                'status': status,
-                'filled_size': filled_size,
-                'updated_at': 'now()'
-            }
+        update_data = {
+            'status': status,
+            'filled_size': filled_size,
+            'updated_at': 'now()'
+        }
 
-            self.client.table('orders').update(update_data).eq('order_id', order_id).execute()
-            logger.debug(f"Updated order {order_id}: {status} ({filled_size} filled)")
-
-        except Exception as e:
-            logger.error(f"Error updating order status: {e}")
+        self.client.table('orders').update(update_data).eq('order_id', order_id).execute()
+        logger.debug(f"Updated order {order_id}: {status} ({filled_size} filled)")
 
     def get_pending_orders(self, market_ticker: str) -> list:
         """

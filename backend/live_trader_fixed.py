@@ -38,6 +38,52 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def load_config_with_env_overrides(config_path: str) -> dict:
+    """Load config from YAML and override with environment variables."""
+    # Load base config
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    # Override trading parameters
+    if os.getenv('TRADING_BANKROLL'):
+        config['trading']['bankroll'] = float(os.getenv('TRADING_BANKROLL'))
+
+    if os.getenv('TRADING_MAX_EXPOSURE_PCT'):
+        config['trading']['max_exposure_pct'] = float(os.getenv('TRADING_MAX_EXPOSURE_PCT'))
+
+    if os.getenv('TRADING_KELLY_FRACTION'):
+        config['trading']['kelly_fraction'] = float(os.getenv('TRADING_KELLY_FRACTION'))
+
+    if os.getenv('TRADING_REVERT_FRACTION'):
+        config['trading']['revert_fraction'] = float(os.getenv('TRADING_REVERT_FRACTION'))
+
+    if os.getenv('TRADING_TRIGGER_THRESHOLD'):
+        config['trading']['trigger_threshold'] = float(os.getenv('TRADING_TRIGGER_THRESHOLD'))
+
+    # Override risk parameters
+    if os.getenv('RISK_MAX_CONCURRENT_GAMES'):
+        config['risk']['max_concurrent_games'] = int(os.getenv('RISK_MAX_CONCURRENT_GAMES'))
+
+    if os.getenv('RISK_MAX_TOTAL_EXPOSURE'):
+        config['risk']['max_total_exposure'] = float(os.getenv('RISK_MAX_TOTAL_EXPOSURE'))
+
+    # Override safety parameters
+    if os.getenv('SAFETY_MAX_CONTRACTS_PER_ORDER'):
+        config['safety']['max_contracts_per_order'] = int(os.getenv('SAFETY_MAX_CONTRACTS_PER_ORDER'))
+
+    # Override monitoring parameters
+    if os.getenv('MONITORING_POLL_INTERVAL'):
+        config['monitoring']['poll_interval'] = int(os.getenv('MONITORING_POLL_INTERVAL'))
+
+    # Add volume threshold (new feature)
+    if os.getenv('VOLUME_THRESHOLD_USD'):
+        config['trading']['volume_threshold_usd'] = float(os.getenv('VOLUME_THRESHOLD_USD'))
+    else:
+        config['trading']['volume_threshold_usd'] = config['trading'].get('volume_threshold_usd', 50000)
+
+    return config
+
+
 @dataclass
 class GameMonitor:
     """Monitors a single game for trading opportunities."""
@@ -98,9 +144,43 @@ class LiveTrader:
         logger.info("=" * 80)
         logger.info("")
 
-        # Load configuration
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+        # Load configuration (with environment variable overrides)
+        self.config = load_config_with_env_overrides(config_path)
+
+        # Log configuration (show overrides)
+        logger.info("Configuration loaded:")
+        logger.info(f"  Bankroll: ${self.config['trading']['bankroll']:,.2f}")
+        logger.info(f"  Max Exposure: {self.config['trading']['max_exposure_pct']:.0%}")
+        logger.info(f"  Kelly Fraction: {self.config['trading']['kelly_fraction']}")
+        logger.info(f"  Revert Fraction: {self.config['trading']['revert_fraction']:.0%}")
+        logger.info(f"  Volume Threshold: ${self.config['trading']['volume_threshold_usd']:,.0f}")
+
+        # Show if any environment variables are overriding config
+        env_overrides = []
+        if os.getenv('TRADING_BANKROLL'):
+            env_overrides.append('TRADING_BANKROLL')
+        if os.getenv('TRADING_MAX_EXPOSURE_PCT'):
+            env_overrides.append('TRADING_MAX_EXPOSURE_PCT')
+        if os.getenv('TRADING_KELLY_FRACTION'):
+            env_overrides.append('TRADING_KELLY_FRACTION')
+        if os.getenv('TRADING_REVERT_FRACTION'):
+            env_overrides.append('TRADING_REVERT_FRACTION')
+        if os.getenv('TRADING_TRIGGER_THRESHOLD'):
+            env_overrides.append('TRADING_TRIGGER_THRESHOLD')
+        if os.getenv('RISK_MAX_CONCURRENT_GAMES'):
+            env_overrides.append('RISK_MAX_CONCURRENT_GAMES')
+        if os.getenv('RISK_MAX_TOTAL_EXPOSURE'):
+            env_overrides.append('RISK_MAX_TOTAL_EXPOSURE')
+        if os.getenv('SAFETY_MAX_CONTRACTS_PER_ORDER'):
+            env_overrides.append('SAFETY_MAX_CONTRACTS_PER_ORDER')
+        if os.getenv('MONITORING_POLL_INTERVAL'):
+            env_overrides.append('MONITORING_POLL_INTERVAL')
+        if os.getenv('VOLUME_THRESHOLD_USD'):
+            env_overrides.append('VOLUME_THRESHOLD_USD')
+
+        if env_overrides:
+            logger.info(f"  Using environment variable overrides: {', '.join(env_overrides)}")
+        logger.info("")
 
         # Initialize clients
         # Rate limit: 75ms = ~13.3 req/sec (safely under Basic tier 20 req/sec limit)
@@ -144,6 +224,7 @@ class LiveTrader:
 
         # Initialize Supabase logger for dashboard
         self.supabase = SupabaseLogger()
+        self._check_database_health()
 
         # Log initial bankroll
         if self.supabase.client:
@@ -153,6 +234,22 @@ class LiveTrader:
                 change=0.0,
                 description="Bot started"
             )
+
+    def _check_database_health(self):
+        """Verify database connection and schema before trading."""
+        if not self.supabase.client:
+            logger.error("=" * 80)
+            logger.error("DATABASE CONNECTION FAILED")
+            logger.error("=" * 80)
+            raise Exception("Cannot start trading without database connection")
+
+        # Test query
+        try:
+            test_query = self.supabase.client.table('games').select('id').limit(1).execute()
+            logger.info("✓ Database connection verified")
+        except Exception as e:
+            logger.error(f"✗ Database health check failed: {e}")
+            raise Exception("Database not accessible")
 
     def _load_nfl_schedule(self) -> dict:
         """Load NFL enriched schedule with kickoff times."""
@@ -261,6 +358,50 @@ class LiveTrader:
             logger.error(f"Error determining favorite side for {market_ticker}: {e}")
             return None
 
+    def get_30day_volume(self, market_ticker: str) -> Optional[float]:
+        """
+        Get 30-day trading volume in USD for a market.
+
+        Returns:
+            Total volume in dollars over last 30 days, or None if unavailable
+        """
+        try:
+            # Calculate timestamp 30 days ago
+            now = int(datetime.utcnow().timestamp())
+            thirty_days_ago = now - (30 * 24 * 3600)
+
+            # Get trades from last 30 days
+            trades = self.public_client.get_trades(
+                ticker=market_ticker,
+                min_ts=thirty_days_ago,
+                max_ts=now
+            )
+
+            if not trades:
+                logger.info(f"  Volume check: No trades found in last 30 days")
+                return 0.0
+
+            # Calculate dollar volume
+            # For binary markets, each contract has $1 max payout
+            # Volume = sum of (price * count) for all trades
+            # Price is in cents, so divide by 100 to get dollars
+            total_volume_dollars = sum(
+                (trade.yes_price / 100.0) * trade.count
+                for trade in trades
+            )
+
+            trade_count = len(trades)
+            contract_count = sum(trade.count for trade in trades)
+
+            logger.info(f"  Volume check: {trade_count:,} trades, {contract_count:,} contracts, "
+                       f"${total_volume_dollars:,.0f} volume (30d)")
+
+            return total_volume_dollars
+
+        except Exception as e:
+            logger.error(f"Error fetching volume for {market_ticker}: {e}")
+            return None
+
     def check_and_capture_checkpoint(self, game: GameMonitor, now: int) -> bool:
         """
         Check if we need to capture a checkpoint and do so.
@@ -327,20 +468,31 @@ class LiveTrader:
         Rules:
         - If ANY checkpoint >= 57% → Eligible
         - BUT if odds_30m < 57% → Override to NOT eligible (final veto)
+        - AND if 30-day volume < threshold → Override to NOT eligible (volume veto)
         """
         threshold = 0.57
+
+        # Get volume threshold from config (with fallback if not set)
+        volume_threshold = self.config['trading'].get('volume_threshold_usd', 50000)
 
         # Check if any checkpoint >= 57%
         checkpoint_odds = [game.odds_6h, game.odds_3h, game.odds_30m]
         has_high_checkpoint = any(odds and odds >= threshold for odds in checkpoint_odds if odds is not None)
 
+        # Check volume (at 30m checkpoint)
+        volume = self.get_30day_volume(game.market_ticker)
+
         # Final veto: if 30m checkpoint < 57%, not eligible
         if game.odds_30m is not None and game.odds_30m < threshold:
             game.is_eligible = False
             logger.info(f"  → NOT ELIGIBLE (30m veto: {game.odds_30m:.0%} < 57%)")
+        # Volume veto: if volume too low, not eligible
+        elif volume is not None and volume < volume_threshold:
+            game.is_eligible = False
+            logger.info(f"  → NOT ELIGIBLE (low volume: ${volume:,.0f} < ${volume_threshold:,.0f})")
         elif has_high_checkpoint:
             game.is_eligible = True
-            logger.info(f"  → ELIGIBLE (checkpoint(s) >= 57%)")
+            logger.info(f"  → ELIGIBLE (checkpoint(s) >= 57%, volume ${volume:,.0f})")
         else:
             game.is_eligible = False
             logger.info(f"  → NOT ELIGIBLE (no checkpoint >= 57%)")
@@ -677,12 +829,12 @@ class LiveTrader:
                 game.order_ids.remove(order_id)
                 logger.info(f"  Removed fully filled order from pending list: {order_id}")
 
-    def check_exit_order_fills(self, game: GameMonitor) -> bool:
+    def check_reversion_signal(self, game: GameMonitor) -> bool:
         """
-        Check if ANY exit orders have filled (bracket strategy).
-        If any exit fills, it means price reverted → exit ALL positions immediately.
+        Check if price is reverting (any exit order filled).
+        This signals we should stop scaling down and start exiting.
 
-        Returns True if we should exit all positions.
+        Returns True if we should cancel buy orders (but NOT do full exit).
         """
         if not game.positions:
             return False
@@ -712,8 +864,8 @@ class LiveTrader:
 
                 # 404 means order executed/cancelled - assume filled
                 if status_response is None:
-                    logger.info(f"  🎯 EXIT ORDER FILLED! (Order: {position.exit_order_id})")
-                    logger.info(f"     Price reverted → Exiting ALL positions")
+                    logger.info(f"  🎯 REVERSION DETECTED! Exit order filled: {position.exit_order_id}")
+                    logger.info(f"     Cancelling buy orders, letting exit orders complete")
                     return True
 
                 if not status_response or 'order' not in status_response:
@@ -723,16 +875,63 @@ class LiveTrader:
                 status = order_status.get('status', 'pending')
                 filled_count = order_status.get('filled_count', 0)
 
-                # If any exit order filled, trigger full exit
+                # If any exit order filled, price is reverting
                 if status == 'filled' or status == 'executed' or filled_count > 0:
-                    logger.info(f"  🎯 EXIT ORDER FILLED! (Order: {position.exit_order_id})")
-                    logger.info(f"     Price reverted → Exiting ALL positions")
+                    logger.info(f"  🎯 REVERSION DETECTED! Exit order filled: {position.exit_order_id}")
+                    logger.info(f"     Cancelling buy orders, letting exit orders complete")
                     return True
 
             except Exception as e:
                 logger.error(f"  ✗ Error checking exit order {position.exit_order_id}: {e}")
 
         return False
+
+    def exit_position_at_halftime(self, game: GameMonitor):
+        """
+        Exit positions at halftime using LIMIT orders (maker only).
+        Place limit orders at current price to exit gracefully.
+        """
+        logger.info("=" * 80)
+        logger.info(f"HALFTIME EXIT: {game.market_title}")
+        logger.info("=" * 80)
+
+        current_price = self.get_current_price(game.market_ticker)
+        if current_price is None:
+            logger.error("Could not get current price, skipping halftime exit")
+            return
+
+        current_price_cents = int(current_price * 100)
+
+        logger.info(f"Placing LIMIT exit orders at {current_price_cents}¢ (maker only)")
+
+        for position in game.positions:
+            if self.config['risk']['dry_run']:
+                logger.info(f"  [DRY RUN] Would place limit sell: {position.size} @ {current_price_cents}¢")
+                order_id = f"dry_run_exit_{position.order_id}"
+                game.exit_order_ids.append(order_id)
+            else:
+                try:
+                    order = self.trading_client.place_order(
+                        market_ticker=game.market_ticker,
+                        side=position.side,
+                        action="sell",
+                        count=position.size,
+                        price=current_price_cents,
+                        order_type="limit"  # MAKER ONLY - never taker!
+                    )
+                    logger.info(f"  ✓ Halftime exit order placed: {order.order_id}")
+
+                    # Track exit order
+                    game.exit_order_ids.append(order.order_id)
+                    position.exit_order_id = order.order_id
+
+                except Exception as e:
+                    logger.error(f"  ✗ Error placing halftime exit order: {e}")
+
+        # Mark as exiting
+        game.exiting = True
+        logger.info("Halftime exit orders placed. Waiting for fills...")
+        logger.info("")
 
     def _cancel_exit_orders(self, game: GameMonitor):
         """Cancel all pending exit orders (55¢ sells) for this game."""
@@ -837,13 +1036,18 @@ class LiveTrader:
         Initiate exit process by placing sell orders.
         Does NOT calculate P&L yet - that happens when orders actually fill.
 
+        NOTE: We ALWAYS use limit orders now (maker only, never taker).
+        The use_market_orders parameter now controls pricing:
+        - If True: Use aggressive limit order at current price - 1¢ (fast fill, still maker)
+        - If False: Use limit order at current price (normal revert exit)
+
         Args:
-            use_market_orders: If True, use market orders (halftime exit).
+            use_market_orders: If True, use aggressive pricing for fast fill (halftime exit).
                               If False, use limit orders at current price (revert exit).
         """
         logger.info("=" * 80)
         logger.info(f"EXIT SIGNAL: {game.market_title}")
-        logger.info(f"Order type: {'MARKET' if use_market_orders else 'LIMIT'}")
+        logger.info(f"Order type: {'AGGRESSIVE LIMIT' if use_market_orders else 'LIMIT'}")
         logger.info("=" * 80)
 
         # First, cancel any unfilled BUY orders
@@ -855,34 +1059,36 @@ class LiveTrader:
         if game.positions:
             self._cancel_exit_orders(game)
 
-        # Get current price for limit orders
-        current_price = None
-        if not use_market_orders:
-            current_price = self.get_current_price(game.market_ticker)
-            if current_price is None:
-                logger.error("Could not get current price, switching to market orders")
-                use_market_orders = True
+        # Always get current price (even for halftime exits - we use limit orders now)
+        current_price = self.get_current_price(game.market_ticker)
+        if current_price is None:
+            logger.error("Could not get current price, cannot exit")
+            return
 
-        current_price_cents = int(current_price * 100) if current_price else None
+        current_price_cents = int(current_price * 100)
 
         # Place sell orders for all positions
         for position in game.positions:
             if self.config['risk']['dry_run']:
-                logger.info(f"  [DRY RUN] Would place {'market' if use_market_orders else 'limit'} sell: {position.size} @ {position.entry_price}¢")
+                logger.info(f"  [DRY RUN] Would place limit sell: {position.size} @ {current_price_cents}¢")
                 order_id = f"dry_run_exit_{position.order_id}"
                 game.exit_order_ids.append(order_id)
             else:
                 try:
                     if use_market_orders:
-                        # Market order - no price specified
-                        logger.info(f"  Placing MARKET sell: {position.size} contracts")
+                        # Use limit order at current price (maker, not taker!)
+                        # Price 1¢ below market for fast fill while still being maker
+                        aggressive_price_cents = current_price_cents - 1
+                        aggressive_price_cents = max(1, aggressive_price_cents)  # Don't go below 1¢
+
+                        logger.info(f"  Placing LIMIT sell at market price (maker): {position.size} @ {aggressive_price_cents}¢")
                         order = self.trading_client.place_order(
                             market_ticker=game.market_ticker,
                             side=position.side,
                             action="sell",
                             count=position.size,
-                            price=1,  # Market orders still need a price, use 1¢
-                            order_type="market"
+                            price=aggressive_price_cents,
+                            order_type="limit"  # ALWAYS maker, never taker
                         )
                     else:
                         # Limit order at current price
@@ -1087,15 +1293,19 @@ class LiveTrader:
                         position_count = len(game.positions) if game.positions else 0
                         logger.info(f"[{game.market_ticker}] Status: triggered={game.triggered}, pending_orders={pending_count}, positions={position_count}")
 
-                    if now > game.halftime_ts:
-                        logger.info(f"Halftime reached for {game.market_ticker} - cleaning up")
-                        # Cancel any unfilled orders
+                    # Check for halftime timeout
+                    if now >= game.halftime_ts and game.positions and not game.exiting:
+                        logger.info("=" * 80)
+                        logger.info(f"HALFTIME TIMEOUT: {game.market_title}")
+                        logger.info("=" * 80)
+
+                        # Cancel ALL orders (buy and exit)
                         if game.order_ids:
                             self.cancel_pending_orders(game)
-                        # Exit any filled positions with MARKET ORDERS (timeout exit)
-                        if game.positions and not game.exiting:
-                            self.exit_position(game, use_market_orders=True)
-                        # Don't remove yet - wait for exit orders to fill
+                        self._cancel_exit_orders(game)
+
+                        # Place limit sell orders at current price (maker only)
+                        self.exit_position_at_halftime(game)
                         continue
 
                     # Check and capture checkpoints (6h, 3h, 30m before kickoff)
@@ -1127,12 +1337,22 @@ class LiveTrader:
                         logger.info(f"→ Monitoring orders for {game.market_ticker}")
                         self.check_order_fills(game)
 
-                    # Check if any bracket exit orders (55¢ sells) have filled
-                    # If ANY exit fills, price reverted → exit ALL positions with limit orders
-                    if game.positions and not game.exiting and self.check_exit_order_fills(game):
-                        logger.info("🎯 Bracket exit filled → Exiting all positions with LIMIT orders")
-                        self.exit_position(game, use_market_orders=False)
-                        # Don't remove yet - wait for exit orders to fill
+                    # Check if price is reverting (any sell filled)
+                    if game.positions and not game.exiting:
+                        if self.check_reversion_signal(game):
+                            # Price is reverting! Cancel buy orders
+                            logger.info("=" * 80)
+                            logger.info(f"REVERSION DETECTED: {game.market_title}")
+                            logger.info("=" * 80)
+
+                            # Cancel pending buy orders (stop scaling down)
+                            if game.order_ids:
+                                self.cancel_pending_orders(game)
+
+                            # Mark as exiting (don't check again)
+                            game.exiting = True
+                            logger.info("Buy orders cancelled. Exit orders remain active.")
+                            logger.info("")
 
                     # Monitor exit orders if we're in exit process
                     if game.exiting:
