@@ -95,5 +95,5 @@ safety:
   # Maximum order size (number of contracts)
   max_contracts_per_order: 100
 
-  # Maximum total capital at risk across all games
-  max_total_exposure: 500
+  # Note: max_total_exposure is now calculated dynamically as:
+  # bankroll × max_exposure_pct (configurable via TRADING_BANKROLL and TRADING_MAX_EXPOSURE env vars)

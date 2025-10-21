@@ -64,8 +64,7 @@ def load_config_with_env_overrides(config_path: str) -> dict:
     if os.getenv('RISK_MAX_CONCURRENT_GAMES'):
         config['risk']['max_concurrent_games'] = int(os.getenv('RISK_MAX_CONCURRENT_GAMES'))
 
-    if os.getenv('RISK_MAX_TOTAL_EXPOSURE'):
-        config['risk']['max_total_exposure'] = float(os.getenv('RISK_MAX_TOTAL_EXPOSURE'))
+    # Note: max_total_exposure removed - now calculated dynamically from bankroll × max_exposure_pct
 
     # Override safety parameters
     if os.getenv('SAFETY_MAX_CONTRACTS_PER_ORDER'):
@@ -593,8 +592,12 @@ class LiveTrader:
         total_capital = sum(price * size / 100.0 for price, size in positions)
         logger.info(f"Total capital at risk: ${total_capital:,.2f}")
 
-        if total_capital > self.config['safety']['max_total_exposure']:
-            logger.warning(f"⚠️  Total exposure ${total_capital:,.2f} exceeds limit, skipping")
+        # Calculate max allowed exposure dynamically from bankroll × max_exposure_pct
+        max_allowed_exposure = self.bankroll * self.config['trading']['max_exposure_pct']
+        logger.info(f"Max allowed exposure: ${max_allowed_exposure:,.2f} ({self.config['trading']['max_exposure_pct']*100:.0f}% of ${self.bankroll:,.2f})")
+
+        if total_capital > max_allowed_exposure:
+            logger.warning(f"⚠️  Total exposure ${total_capital:,.2f} exceeds limit ${max_allowed_exposure:,.2f}, skipping")
             return
 
         for price_cents, size in positions:
