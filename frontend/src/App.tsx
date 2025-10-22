@@ -5,6 +5,7 @@ import Schedule from './pages/Schedule'
 import TradeHistory from './pages/TradeHistory'
 import Analytics from './pages/Analytics'
 import Charts from './pages/Charts'
+import LiveCharts from './pages/LiveCharts'
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
           <Route path="/history" element={<TradeHistory />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/charts" element={<Charts />} />
+          <Route path="/live-charts" element={<LiveCharts />} />
         </Routes>
       </div>
     </Router>
