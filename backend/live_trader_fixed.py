@@ -1,6 +1,8 @@
 """
 Live Trading Bot - FIXED VERSION
 Uses external schedule CSVs since Kalshi doesn't provide strike_date for football games.
+
+Deployment: Oct 25, 2025 - Critical halftime fix + all 42 CFB games
 """
 import logging
 import os
