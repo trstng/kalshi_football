@@ -1012,14 +1012,16 @@ class LiveTrader:
 
                 # Check if filled
                 if status == 'filled' or status == 'executed':
-                    # Find corresponding position to calculate P&L
+                    # Find corresponding position to calculate P&L and mark as exited
                     for position in game.positions:
                         # Match position to exit order by size (approximate)
-                        if position.size == total_count:
+                        if position.size == total_count and position.exit_order_id == order_id:
                             if fill_price:
                                 pnl = ((fill_price - position.entry_price) / 100.0) * position.size
                                 total_pnl += pnl
                                 logger.info(f"    Position {position.size} @ {position.entry_price}¢ → {fill_price}¢ = ${pnl:+.2f}")
+                            # Mark position as exited by setting size to 0
+                            position.size = 0
                             break
 
                     filled_orders.append(order_id)
@@ -1137,9 +1139,11 @@ class LiveTrader:
                         logger.info(f"[{game.market_ticker}] Status: triggered={game.triggered}, pending_orders={pending_count}, positions={position_count}")
 
                     # Check for halftime timeout
-                    if now >= game.halftime_ts and game.positions and not game.exiting:
+                    # Verify we actually have open positions before exiting
+                    total_position_size = sum(p.size for p in game.positions) if game.positions else 0
+                    if now >= game.halftime_ts and total_position_size > 0 and not game.exiting:
                         logger.info("=" * 80)
-                        logger.info(f"HALFTIME TIMEOUT: {game.market_title}")
+                        logger.info(f"HALFTIME TIMEOUT: {game.market_title} (Position size: {total_position_size} contracts)")
                         logger.info("=" * 80)
 
                         # Cancel ALL orders (buy and exit)
