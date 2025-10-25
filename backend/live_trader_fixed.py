@@ -865,11 +865,13 @@ class LiveTrader:
             try:
                 status_response = self.trading_client.get_order_status(position.exit_order_id)
 
-                # 404 means order executed/cancelled - assume filled
+                # 404 (None response) could mean:
+                # 1. Order was just placed and not yet in system (race condition)
+                # 2. Order executed and removed from active orders
+                # Don't assume - skip this position and continue checking others
                 if status_response is None:
-                    logger.info(f"  🎯 REVERSION DETECTED! Exit order filled: {position.exit_order_id}")
-                    logger.info(f"     Cancelling buy orders, letting exit orders complete")
-                    return True
+                    logger.debug(f"  Exit order {position.exit_order_id} returned 404 (recently placed or executed)")
+                    continue
 
                 if not status_response or 'order' not in status_response:
                     continue
