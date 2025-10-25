@@ -831,64 +831,6 @@ class LiveTrader:
                 game.order_ids.remove(order_id)
                 logger.info(f"  Removed fully filled order from pending list: {order_id}")
 
-    def check_reversion_signal(self, game: GameMonitor) -> bool:
-        """
-        Check if price is reverting (any exit order filled).
-        This signals we should stop scaling down and start exiting.
-
-        Returns True if we should cancel buy orders (but NOT do full exit).
-        """
-        if not game.positions:
-            return False
-
-        if self.config['risk']['dry_run']:
-            # In dry run, check if current price >= exit target
-            current_price = self.get_current_price(game.market_ticker)
-            if current_price is None:
-                return False
-
-            revert_bands = self.config['trading']['revert_bands']
-            if revert_bands and current_price >= revert_bands[0]:
-                logger.info(f"  🎯 [DRY RUN] Exit order would have filled @ {int(revert_bands[0] * 100)}¢")
-                return True
-            return False
-
-        if not self.trading_client:
-            return False
-
-        # Check each position's exit order
-        for position in game.positions:
-            if not position.exit_order_id:
-                continue
-
-            try:
-                status_response = self.trading_client.get_order_status(position.exit_order_id)
-
-                # 404 (None response) could mean:
-                # 1. Order was just placed and not yet in system (race condition)
-                # 2. Order executed and removed from active orders
-                # Don't assume - skip this position and continue checking others
-                if status_response is None:
-                    logger.debug(f"  Exit order {position.exit_order_id} returned 404 (recently placed or executed)")
-                    continue
-
-                if not status_response or 'order' not in status_response:
-                    continue
-
-                order_status = status_response.get('order', {})
-                status = order_status.get('status', 'pending')
-                filled_count = order_status.get('filled_count', 0)
-
-                # If any exit order filled, price is reverting
-                if status == 'filled' or status == 'executed' or filled_count > 0:
-                    logger.info(f"  🎯 REVERSION DETECTED! Exit order filled: {position.exit_order_id}")
-                    logger.info(f"     Cancelling buy orders, letting exit orders complete")
-                    return True
-
-            except Exception as e:
-                logger.error(f"  ✗ Error checking exit order {position.exit_order_id}: {e}")
-
-        return False
 
     def exit_position_at_halftime(self, game: GameMonitor):
         """
@@ -1012,110 +954,7 @@ class LiveTrader:
         game.order_ids.clear()
         logger.info(f"Order cancellation complete: {cancelled_count} cancelled, {failed_count} failed")
 
-    def check_exit_signal(self, game: GameMonitor) -> bool:
-        """Check if we should exit position."""
-        if not game.positions:
-            return False
 
-        now = int(datetime.utcnow().timestamp())
-
-        if now >= game.halftime_ts:
-            logger.info(f"Halftime timeout reached for {game.market_title}")
-            return True
-
-        current_price = self.get_current_price(game.market_ticker)
-        if current_price is None:
-            return False
-
-        revert_bands = self.config['trading']['revert_bands']
-        for band in revert_bands:
-            if current_price >= band:
-                logger.info(f"Price reverted to {current_price:.0%} (band: {band:.0%})")
-                return True
-
-        return False
-
-    def exit_position(self, game: GameMonitor, use_market_orders: bool = False):
-        """
-        Initiate exit process by placing sell orders.
-        Does NOT calculate P&L yet - that happens when orders actually fill.
-
-        NOTE: We ALWAYS use limit orders now (maker only, never taker).
-        The use_market_orders parameter now controls pricing:
-        - If True: Use aggressive limit order at current price - 1¢ (fast fill, still maker)
-        - If False: Use limit order at current price (normal revert exit)
-
-        Args:
-            use_market_orders: If True, use aggressive pricing for fast fill (halftime exit).
-                              If False, use limit orders at current price (revert exit).
-        """
-        logger.info("=" * 80)
-        logger.info(f"EXIT SIGNAL: {game.market_title}")
-        logger.info(f"Order type: {'AGGRESSIVE LIMIT' if use_market_orders else 'LIMIT'}")
-        logger.info("=" * 80)
-
-        # First, cancel any unfilled BUY orders
-        if game.order_ids:
-            logger.info("Cancelling unfilled buy orders before exiting positions")
-            self.cancel_pending_orders(game)
-
-        # Cancel any pending bracket EXIT orders (55¢ sells)
-        if game.positions:
-            self._cancel_exit_orders(game)
-
-        # Always get current price (even for halftime exits - we use limit orders now)
-        current_price = self.get_current_price(game.market_ticker)
-        if current_price is None:
-            logger.error("Could not get current price, cannot exit")
-            return
-
-        current_price_cents = int(current_price * 100)
-
-        # Place sell orders for all positions
-        for position in game.positions:
-            if self.config['risk']['dry_run']:
-                logger.info(f"  [DRY RUN] Would place limit sell: {position.size} @ {current_price_cents}¢")
-                order_id = f"dry_run_exit_{position.order_id}"
-                game.exit_order_ids.append(order_id)
-            else:
-                try:
-                    if use_market_orders:
-                        # Use limit order at current price (maker, not taker!)
-                        # Price 1¢ below market for fast fill while still being maker
-                        aggressive_price_cents = current_price_cents - 1
-                        aggressive_price_cents = max(1, aggressive_price_cents)  # Don't go below 1¢
-
-                        logger.info(f"  Placing LIMIT sell at market price (maker): {position.size} @ {aggressive_price_cents}¢")
-                        order = self.trading_client.place_order(
-                            market_ticker=game.market_ticker,
-                            side=position.side,
-                            action="sell",
-                            count=position.size,
-                            price=aggressive_price_cents,
-                            order_type="limit"  # ALWAYS maker, never taker
-                        )
-                    else:
-                        # Limit order at current price
-                        logger.info(f"  Placing LIMIT sell: {position.size} @ {current_price_cents}¢")
-                        order = self.trading_client.place_order(
-                            market_ticker=game.market_ticker,
-                            side=position.side,
-                            action="sell",
-                            count=position.size,
-                            price=current_price_cents,
-                            order_type="limit"
-                        )
-
-                    game.exit_order_ids.append(order.order_id)
-                    logger.info(f"  ✓ Exit order placed: {order.order_id}")
-
-                except Exception as e:
-                    logger.error(f"  ✗ Error placing exit order: {e}")
-
-        # Set exiting flag - P&L will be calculated when orders fill
-        game.exiting = True
-        logger.info(f"Exit orders placed. Waiting for fills to calculate P&L...")
-        logger.info("")
 
     def monitor_exit_orders(self, game: GameMonitor) -> bool:
         """
@@ -1341,27 +1180,15 @@ class LiveTrader:
                         logger.info(f"→ Monitoring orders for {game.market_ticker}")
                         self.check_order_fills(game)
 
-                    # Check if price is reverting (any sell filled)
-                    if game.positions and not game.exiting:
-                        if self.check_reversion_signal(game):
-                            # Price is reverting! Cancel buy orders
-                            logger.info("=" * 80)
-                            logger.info(f"REVERSION DETECTED: {game.market_title}")
-                            logger.info("=" * 80)
-
-                            # Cancel pending buy orders (stop scaling down)
-                            if game.order_ids:
-                                self.cancel_pending_orders(game)
-
-                            # Mark as exiting (don't check again)
-                            game.exiting = True
-                            logger.info("Buy orders cancelled. Exit orders remain active.")
-                            logger.info("")
 
                     # Monitor exit orders if we're in exit process
                     if game.exiting:
                         if self.monitor_exit_orders(game):
-                            # All exit orders filled, can remove game
+                            # All exit orders filled - position is flat
+                            # Cancel any remaining buy orders before removing game
+                            if game.order_ids:
+                                logger.info(f"Position flat for {game.market_title} - cancelling {len(game.order_ids)} remaining buy orders")
+                                self.cancel_pending_orders(game)
                             games_to_remove.append(market_ticker)
                         continue  # Skip other checks while exiting
 
@@ -1374,12 +1201,6 @@ class LiveTrader:
                         else:
                             logger.warning(f"Max concurrent games ({max_concurrent}) reached, skipping entry")
 
-                    # Check for other exit signals (non-bracket exits)
-                    if game.positions and not game.exiting and self.check_exit_signal(game):
-                        # Use limit orders for normal exits (not halftime timeout)
-                        now_time = int(datetime.utcnow().timestamp())
-                        use_market = (now_time >= game.halftime_ts)
-                        self.exit_position(game, use_market_orders=use_market)
 
                 for market_ticker in games_to_remove:
                     del self.active_games[market_ticker]
