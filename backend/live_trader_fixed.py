@@ -736,10 +736,9 @@ class LiveTrader:
                 logger.info(f"  Checking order status: {order_id}")
                 status_response = self.trading_client.get_order_status(order_id)
 
-                # None means 404 - order was executed/cancelled and removed from active orders
+                # None means 404 - could be race condition, DON'T remove order
                 if status_response is None:
-                    logger.info(f"  ⚠️  Order {order_id} not found (likely executed) - removing from pending list")
-                    filled_orders.append(order_id)
+                    logger.debug(f"  Order {order_id} returned 404 (race condition or recently executed) - keeping in pending list")
                     continue
 
                 if not status_response or 'order' not in status_response:
