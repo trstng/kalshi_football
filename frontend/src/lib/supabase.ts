@@ -52,6 +52,7 @@ export type Position = {
   exit_price: number | null
   exit_time: number | null
   pnl: number | null
+  fees: number | null
   order_id: string | null
   status: 'open' | 'closed'
   created_at: string
