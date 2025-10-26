@@ -1140,12 +1140,13 @@ class LiveTrader:
                         position_count = len(game.positions) if game.positions else 0
                         logger.info(f"[{game.market_ticker}] Status: triggered={game.triggered}, pending_orders={pending_count}, positions={position_count}")
 
-                    # Check for halftime timeout
-                    # Verify we actually have open positions before exiting
+                    # Check for halftime timeout - ONLY CANCEL ORDERS, NO SELLING
+                    # Manual selling will be done if needed
                     total_position_size = sum(p.size for p in game.positions) if game.positions else 0
-                    if now >= game.halftime_ts and total_position_size > 0 and not game.exiting:
+                    if now >= game.halftime_ts and not game.exiting:
                         logger.info("=" * 80)
                         logger.info(f"HALFTIME TIMEOUT: {game.market_title} (Position size: {total_position_size} contracts)")
+                        logger.info(f"CANCELLING ORDERS ONLY - Manual exit required if position open")
                         logger.info("=" * 80)
 
                         # Cancel ALL orders (buy and exit)
@@ -1153,8 +1154,12 @@ class LiveTrader:
                             self.cancel_pending_orders(game)
                         self._cancel_exit_orders(game)
 
-                        # Place limit sell orders at current price (maker only)
-                        self.exit_position_at_halftime(game)
+                        # DISABLED: Automatic halftime selling (causing issues with stale position data)
+                        # Will manually exit positions if needed
+                        # self.exit_position_at_halftime(game)
+
+                        # Mark as exiting to prevent re-triggering
+                        game.exiting = True
                         continue
 
                     # Check and capture checkpoints (6h, 3h, 30m before kickoff)
