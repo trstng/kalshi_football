@@ -2,11 +2,22 @@ import { useEffect, useState } from 'react'
 import { supabase, type Position } from '../lib/supabase'
 import { format } from 'date-fns'
 
+const PAGE_SIZE = 50
+
 export default function TradeHistory() {
   const [closedPositions, setClosedPositions] = useState<Position[]>([])
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const [allPositionsStats, setAllPositionsStats] = useState({
+    totalPnL: 0,
+    totalTrades: 0,
+    winningTrades: 0,
+    avgWin: 0
+  })
 
   useEffect(() => {
-    fetchClosedPositions()
+    fetchAllStats()
+    fetchClosedPositions(1)
 
     const subscription = supabase
       .channel('closed_positions')
@@ -15,7 +26,10 @@ export default function TradeHistory() {
         schema: 'public',
         table: 'positions',
         filter: 'status=eq.closed'
-      }, fetchClosedPositions)
+      }, () => {
+        fetchAllStats()
+        fetchClosedPositions(currentPage)
+      })
       .subscribe()
 
     return () => {
@@ -23,22 +37,51 @@ export default function TradeHistory() {
     }
   }, [])
 
-  async function fetchClosedPositions() {
+  useEffect(() => {
+    fetchClosedPositions(currentPage)
+  }, [currentPage])
+
+  async function fetchAllStats() {
+    // Fetch ALL closed positions for stats calculation (without pagination)
+    const { data, count } = await supabase
+      .from('positions')
+      .select('pnl', { count: 'exact' })
+      .eq('status', 'closed')
+
+    if (data && count !== null) {
+      const totalPnL = data.reduce((sum, pos) => sum + (pos.pnl || 0), 0)
+      const winningTrades = data.filter(p => (p.pnl || 0) > 0).length
+      const avgWin = winningTrades > 0
+        ? data.filter(p => (p.pnl || 0) > 0).reduce((sum, p) => sum + (p.pnl || 0), 0) / winningTrades
+        : 0
+
+      setAllPositionsStats({
+        totalPnL,
+        totalTrades: count,
+        winningTrades,
+        avgWin
+      })
+      setTotalCount(count)
+    }
+  }
+
+  async function fetchClosedPositions(page: number) {
+    const from = (page - 1) * PAGE_SIZE
+    const to = from + PAGE_SIZE - 1
+
     const { data } = await supabase
       .from('positions')
       .select('*')
       .eq('status', 'closed')
       .order('exit_time', { ascending: false })
-      .limit(100)
+      .range(from, to)
 
     if (data) setClosedPositions(data)
   }
 
-  const totalPnL = closedPositions.reduce((sum, pos) => sum + (pos.pnl || 0), 0)
-  const winningTrades = closedPositions.filter(p => (p.pnl || 0) > 0).length
-  const winRate = closedPositions.length > 0 ? (winningTrades / closedPositions.length) * 100 : 0
-  const avgWin = winningTrades > 0
-    ? closedPositions.filter(p => (p.pnl || 0) > 0).reduce((sum, p) => sum + (p.pnl || 0), 0) / winningTrades
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE)
+  const winRate = allPositionsStats.totalTrades > 0
+    ? (allPositionsStats.winningTrades / allPositionsStats.totalTrades) * 100
     : 0
 
   return (
@@ -57,17 +100,17 @@ export default function TradeHistory() {
           {/* Total P&L */}
           <div className="relative group">
             <div className={`absolute -inset-0.5 rounded-2xl blur opacity-30 group-hover:opacity-100 transition duration-300 ${
-              totalPnL >= 0 ? 'bg-gradient-to-r from-green-600 to-emerald-600' : 'bg-gradient-to-r from-red-600 to-rose-600'
+              allPositionsStats.totalPnL >= 0 ? 'bg-gradient-to-r from-green-600 to-emerald-600' : 'bg-gradient-to-r from-red-600 to-rose-600'
             }`}></div>
             <div className="relative bg-slate-800/90 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-gray-400 text-sm font-semibold uppercase tracking-wider">Total P&L</span>
-                <svg className={`w-5 h-5 ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={totalPnL >= 0 ? "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" : "M13 17h8m0 0V9m0 8l-8-8-4 4-6-6"} />
+                <svg className={`w-5 h-5 ${allPositionsStats.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={allPositionsStats.totalPnL >= 0 ? "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" : "M13 17h8m0 0V9m0 8l-8-8-4 4-6-6"} />
                 </svg>
               </div>
-              <div className={`text-4xl font-black mb-1 ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}
+              <div className={`text-4xl font-black mb-1 ${allPositionsStats.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {allPositionsStats.totalPnL >= 0 ? '+' : ''}${allPositionsStats.totalPnL.toFixed(2)}
               </div>
               <div className="text-gray-400 text-sm font-semibold">
                 All-Time Returns
@@ -86,7 +129,7 @@ export default function TradeHistory() {
                 </svg>
               </div>
               <div className="text-4xl font-black text-white">
-                {closedPositions.length}
+                {allPositionsStats.totalTrades}
               </div>
               <div className="text-blue-400 text-sm font-semibold">
                 Completed Positions
@@ -108,7 +151,7 @@ export default function TradeHistory() {
                 {winRate.toFixed(1)}%
               </div>
               <div className="text-purple-400 text-sm font-semibold">
-                {winningTrades}W / {closedPositions.length - winningTrades}L
+                {allPositionsStats.winningTrades}W / {allPositionsStats.totalTrades - allPositionsStats.winningTrades}L
               </div>
             </div>
           </div>
@@ -124,7 +167,7 @@ export default function TradeHistory() {
                 </svg>
               </div>
               <div className="text-4xl font-black text-white">
-                ${avgWin.toFixed(2)}
+                ${allPositionsStats.avgWin.toFixed(2)}
               </div>
               <div className="text-amber-400 text-sm font-semibold">
                 Per Winning Trade
@@ -160,6 +203,9 @@ export default function TradeHistory() {
                       Size
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
+                      Fees
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
                       P&L
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
@@ -170,7 +216,7 @@ export default function TradeHistory() {
                 <tbody>
                   {closedPositions.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center">
+                      <td colSpan={7} className="px-6 py-12 text-center">
                         <div className="flex flex-col items-center gap-3">
                           <svg className="w-16 h-16 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
@@ -184,6 +230,7 @@ export default function TradeHistory() {
                     closedPositions.map((position) => {
                       const pnl = position.pnl || 0
                       const isWin = pnl > 0
+                      const fees = position.fees || 0
                       return (
                         <tr key={position.id} className="border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors">
                           <td className="px-6 py-4">
@@ -197,6 +244,9 @@ export default function TradeHistory() {
                           </td>
                           <td className="px-6 py-4">
                             <span className="text-gray-400 font-medium">{position.size}</span>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="text-gray-400 font-medium">${fees.toFixed(2)}</span>
                           </td>
                           <td className="px-6 py-4">
                             <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full font-black ${
@@ -217,6 +267,68 @@ export default function TradeHistory() {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="px-6 py-4 border-t border-slate-700/50 bg-slate-900/50">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-gray-400">
+                    Showing {((currentPage - 1) * PAGE_SIZE) + 1} to {Math.min(currentPage * PAGE_SIZE, totalCount)} of {totalCount} positions
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                      disabled={currentPage === 1}
+                      className={`px-4 py-2 rounded-lg font-semibold text-sm transition-all ${
+                        currentPage === 1
+                          ? 'bg-slate-800 text-gray-600 cursor-not-allowed'
+                          : 'bg-slate-700 text-white hover:bg-slate-600'
+                      }`}
+                    >
+                      Previous
+                    </button>
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum: number
+                        if (totalPages <= 5) {
+                          pageNum = i + 1
+                        } else if (currentPage <= 3) {
+                          pageNum = i + 1
+                        } else if (currentPage >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i
+                        } else {
+                          pageNum = currentPage - 2 + i
+                        }
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => setCurrentPage(pageNum)}
+                            className={`px-3 py-2 rounded-lg font-semibold text-sm transition-all ${
+                              currentPage === pageNum
+                                ? 'bg-purple-600 text-white'
+                                : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <button
+                      onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                      disabled={currentPage === totalPages}
+                      className={`px-4 py-2 rounded-lg font-semibold text-sm transition-all ${
+                        currentPage === totalPages
+                          ? 'bg-slate-800 text-gray-600 cursor-not-allowed'
+                          : 'bg-slate-700 text-white hover:bg-slate-600'
+                      }`}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
