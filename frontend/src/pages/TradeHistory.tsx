@@ -194,6 +194,9 @@ export default function TradeHistory() {
                       Market
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
+                      Date
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
                       Entry
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
@@ -207,9 +210,6 @@ export default function TradeHistory() {
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
                       P&L
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">
-                      Exit Time
                     </th>
                   </tr>
                 </thead>
@@ -236,6 +236,9 @@ export default function TradeHistory() {
                           <td className="px-6 py-4">
                             <div className="font-bold text-white text-lg">{position.market_ticker}</div>
                           </td>
+                          <td className="px-6 py-4 text-gray-400 font-medium">
+                            {position.entry_time && format(new Date(position.entry_time), 'MMM d, yyyy')}
+                          </td>
                           <td className="px-6 py-4">
                             <span className="text-gray-300 font-medium">{position.entry_price}¢</span>
                           </td>
@@ -256,9 +259,6 @@ export default function TradeHistory() {
                             }`}>
                               {isWin && '+'}${pnl.toFixed(2)}
                             </div>
-                          </td>
-                          <td className="px-6 py-4 text-gray-400 font-medium">
-                            {position.exit_time && format(new Date(position.exit_time * 1000), 'MMM d, h:mm a')}
                           </td>
                         </tr>
                       )
