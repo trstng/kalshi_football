@@ -35,15 +35,15 @@ trading:
 
   # Scaling levels (price in cents, Kelly multiplier)
   scaling_levels:
-    - trigger: 49
-      kelly_mult: 1.0
     - trigger: 45
+      kelly_mult: 1.0
+    - trigger: 42
       kelly_mult: 1.5
-    - trigger: 41
+    - trigger: 38
       kelly_mult: 2.0
-    - trigger: 37
+    - trigger: 35
       kelly_mult: 2.5
-    - trigger: 33
+    - trigger: 31
       kelly_mult: 3.0
 
 # Sports to trade
