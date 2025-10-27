@@ -8,7 +8,7 @@ export interface ScheduleGame {
   awayTeam: string
   homeTeam: string
   kickoffTs: number
-  series: 'NFL' | 'CFB'
+  series: 'NFL' | 'CFB' | 'NHL'
 }
 
 /**
@@ -72,10 +72,18 @@ export async function fetchNFLSchedule(): Promise<ScheduleGame[]> {
 export async function fetchCFBSchedule(): Promise<ScheduleGame[]> {
   try {
     const response = await fetch('/schedules/cfb_schedule.csv')
-    const text = await response.text()
-    const data = parseCSV(text)
+    if (!response.ok) {
+      console.error(`CFB schedule fetch failed: ${response.status} ${response.statusText}`)
+      return []
+    }
 
-    return data
+    const text = await response.text()
+    console.log('CFB CSV loaded, length:', text.length, 'chars')
+
+    const data = parseCSV(text)
+    console.log('CFB CSV parsed:', data.length, 'rows')
+
+    const games = data
       .map(row => ({
         marketTicker: row.market_ticker || '',
         marketTitle: row.market_title || '',
@@ -85,6 +93,11 @@ export async function fetchCFBSchedule(): Promise<ScheduleGame[]> {
         series: 'CFB' as const
       }))
       .filter(game => !isNaN(game.kickoffTs) && game.kickoffTs > 0)
+
+    console.log('CFB games after filtering:', games.length)
+    console.log('Sample CFB game:', games[0])
+
+    return games
   } catch (error) {
     console.error('Error fetching CFB schedule:', error)
     return []
