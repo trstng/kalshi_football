@@ -1,7 +1,9 @@
 # Artifacts and outputs
 artifacts/
-!artifacts/*_enriched.csv
 *.csv
+!artifacts/*_enriched.csv
+!artifacts/cfb_2025_schedule_master.csv
+!artifacts/nfl_2025_schedule_corrected.csv
 !frontend/public/schedules/*.csv
 *.parquet
 *.png
